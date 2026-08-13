@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+
+# Runtime state: shared secret, pid files, call log, tunnel logs.
+.run/
+
+# Vendored third-party binaries (tunnel-client, cloudflared).
+.tools/
+
+# Local Claude Code settings — machine specific.
+.claude/

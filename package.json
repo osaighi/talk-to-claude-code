@@ -1,0 +1,52 @@
+{
+  "name": "talk-to-claude-code",
+  "version": "0.1.0",
+  "description": "Drive your Claude Code sessions by voice from any MCP client — hands-free, while a Remote Control client watches the same session",
+  "type": "module",
+  "bin": {
+    "talk-to-claude-code": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "agent",
+    "automation",
+    "voice",
+    "hands-free",
+    "grok"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/osaighi/talk-to-claude-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/osaighi/talk-to-claude-code/issues"
+  },
+  "homepage": "https://github.com/osaighi/talk-to-claude-code#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}
