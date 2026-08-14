@@ -2,7 +2,7 @@
 
 **Drive your Claude Code sessions by voice, hands-free, from any MCP client.**
 
-Ask Grok — or ChatGPT, or Claude, or your own script — to give a task to a Claude Code session
+Ask Grok — or Claude, or your own script — to give a task to a Claude Code session
 running on your machine, hear what it is doing while it works, and get the answer read back. It
 was built to work from a car: Grok's voice mode on CarPlay reaches custom MCP connectors, so the
 whole loop runs without touching a keyboard.
@@ -95,18 +95,28 @@ Grok is the client this was built around, because it is the one that closes the 
 its voice mode reaches custom MCP connectors, it ships on CarPlay, and it polls patiently instead
 of giving up after one call.
 
-Grok has no equivalent of OpenAI's outbound tunnel, so the server needs a public HTTPS URL. Run
-HTTP mode behind a tunnel of your choice — Tailscale Funnel gives a stable hostname without a
+Grok calls your server from its own infrastructure, so it needs a public HTTPS URL. Run HTTP
+mode behind a tunnel of your choice — Tailscale Funnel gives a stable hostname without a
 domain, which matters because a connector has to be reconfigured every time the URL changes:
 
 ```bash
 CLAUDE_REMOTE_MCP_TOKEN="$(openssl rand -hex 24)" node dist/index.js --http
-tailscale funnel --bg --https=8443 8787      # or: cloudflared tunnel --url http://127.0.0.1:8787
+tailscale funnel --bg --https=8443 8787      # stable hostname, survives restarts
 ```
 
+Or, to get going in one command with a throwaway URL, `scripts/serve-public.sh` generates a
+secret, starts the server, opens a Cloudflare quick tunnel and prints the connector settings:
+
+```bash
+bash scripts/serve-public.sh          # READONLY=1 to expose observation only
+bash scripts/serve-public.sh --stop
+```
+
+Quick tunnels are fine for a first test but the URL changes on every restart, which means
+reconfiguring the connector each time — move to a stable hostname once it works.
+
 Then either add it in the app — `grok.com/connectors` → New Connector → **Custom** → your URL —
-or declare it in an xAI API call. The API path accepts a proper `Authorization` header, which
-ChatGPT's custom connectors cannot:
+or declare it in an xAI API call. The API path accepts a proper `Authorization` header:
 
 ```jsonc
 tools: [{
@@ -121,72 +131,28 @@ tools: [{
 `allowed_tools` is a useful second lock: it restricts Grok to a subset regardless of what the
 server exposes, and composes with `CLAUDE_REMOTE_MCP_ALLOW` on this side.
 
-A note on voice, learned the hard way: ChatGPT's voice mode **cannot** reach MCP connectors at
-all, and CarPlay is voice-only, which is why the `/voice` endpoints below exist as a fallback for
-that stack. With Grok the connector works in voice directly and you do not need them.
+### Other clients
 
-## Connecting ChatGPT
+Any MCP client works — the server is not Grok-specific. Two things decide whether a given one is
+usable for the voice case, and both are worth checking before you invest time:
 
-ChatGPT does not speak stdio and cannot reach your machine directly — OpenAI's servers make the
-calls. There are two routes. Note that neither works in **voice mode**, which has no access to
-custom connectors.
+1. **Does its voice mode reach custom MCP connectors?** Several assistants expose connectors in
+   text chat but not in voice, which makes them useless in a car no matter how the server is set
+   up. Test in voice early.
+2. **Does it keep polling?** A single request cannot outlive the client's deadline, so the client
+   has to call `get_reply` repeatedly. One that stops after the first `state=working` will never
+   see an answer to anything that takes more than a minute.
 
-### Route 1 — Secure MCP Tunnel (recommended)
+If your client fails the first test, the [`/voice` endpoints](#voice-endpoints-siri-shortcuts)
+below sidestep MCP entirely.
 
-OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) runs on this machine and opens
-an **outbound-only** connection to OpenAI. Nothing is exposed to the public internet, and it can
-drive a stdio server directly, so no HTTP mode is needed.
+## Before you expose it
 
-Download `tunnel-client` from its
-[releases](https://github.com/openai/tunnel-client/releases) into `.tools/` (or point
-`TUNNEL_CLIENT` at your copy — verify the checksum against the published `SHA256SUMS.txt`).
-Create a tunnel at platform.openai.com/settings/organization/tunnels and a **runtime** API key
-with Tunnels Read + Use, then:
+This server queues prompts into local Claude Code sessions, and those sessions edit files and run
+shell commands. Whatever you connect — and anything that successfully prompt-injects it —
+inherits that reach.
 
-```bash
-export CONTROL_PLANE_API_KEY="sk-..."
-export TUNNEL_ID="tunnel_..."
-bash scripts/tunnel-openai.sh              # override with PROFILE=... HEALTH_ADDR=...
-```
-
-That wraps three steps: `init` writes a `sample_mcp_stdio_local` profile pointing at
-`node dist/index.js`, `doctor --explain` validates it, and `run` starts the daemon. The profile
-stores only a reference (`env:CONTROL_PLANE_API_KEY`), never the key itself.
-
-Note the three distinct credentials: `CONTROL_PLANE_TUNNEL_ID` identifies the tunnel,
-`CONTROL_PLANE_API_KEY` is what the daemon runs with, and `OPENAI_ADMIN_KEY` is only for
-`tunnel-client admin tunnels …`. Do not give the admin key to the daemon.
-
-Then in ChatGPT: enable developer mode (Settings → Connectors → Advanced), create an app, choose
-**Tunnel** under Connection, and pick the tunnel.
-
-To point the tunnel at HTTP mode instead of stdio, run this server with `--http` and pass
-`--mcp-server-url http://127.0.0.1:8787/mcp` to `tunnel-client init`.
-
-### Route 2 — public HTTPS endpoint
-
-Run HTTP mode behind your own tunnel (cloudflared, ngrok, Tailscale Funnel):
-
-```bash
-CLAUDE_REMOTE_MCP_TOKEN="$(openssl rand -hex 24)" node dist/index.js --http
-cloudflared tunnel --url http://127.0.0.1:8787
-```
-
-ChatGPT custom connectors support OAuth or no-auth, but cannot attach a static bearer header —
-so for a no-auth connector, put the secret in the URL and register
-`https://<your-tunnel>/mcp/<token>` as the endpoint. The server accepts the secret either as
-`Authorization: Bearer <token>` or as that trailing path segment.
-
-Developer mode is available on Pro, Plus, Business, Enterprise and Education plans, on the web,
-and supports read *and* write tools (write actions prompt for confirmation).
-
-### Before you connect it
-
-This server queues prompts into local Claude Code sessions, and those sessions can run shell
-commands. Connecting it to ChatGPT gives ChatGPT — and anything that successfully prompt-injects
-ChatGPT — that reach. OpenAI flags developer mode as elevated-risk for exactly this reason.
-
-A sensible posture for a ChatGPT-facing instance:
+A sensible posture for anything internet-facing:
 
 ```bash
 CLAUDE_REMOTE_MCP_TOKEN="$(openssl rand -hex 24)" \
@@ -194,14 +160,16 @@ CLAUDE_REMOTE_MCP_ALLOW=my-scratch-session \
 node dist/index.js --http
 ```
 
-or `CLAUDE_REMOTE_MCP_READONLY=1` if you only want ChatGPT to observe your sessions.
+That pins it to one throwaway session. Use `CLAUDE_REMOTE_MCP_READONLY=1` when you only want the
+client to observe, and prefer a tunnel that gives you a private hostname over one that publishes
+a guessable URL.
 
 ## Transports
 
 | Mode | Command | Use |
 |---|---|---|
-| stdio (default) | `node dist/index.js` | Claude Code, Claude Desktop, OpenAI tunnel stdio mode |
-| Streamable HTTP | `node dist/index.js --http` | ChatGPT, remote clients |
+| stdio (default) | `node dist/index.js` | Claude Code, Claude Desktop, any local MCP client |
+| Streamable HTTP | `node dist/index.js --http` | Grok and other hosted clients, behind a tunnel |
 
 HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 `CLAUDE_REMOTE_MCP_TOKEN` unless `CLAUDE_REMOTE_MCP_NO_AUTH=1` is set. Override with `--host`,
@@ -239,11 +207,13 @@ again with the returned cursor; `state=finished` means stop. Assistant turns
 list the tools the session used, which is the progress signal during a long
 task.
 
-### Voice / CarPlay
+### Voice endpoints (Siri Shortcuts)
 
-ChatGPT's voice mode cannot reach MCP connectors, and CarPlay is voice-only, so
-MCP is a dead end in the car. These endpoints bypass it: plain text in, plain
-text out, short enough to be spoken, callable from a Siri Shortcut.
+If your assistant cannot reach MCP connectors from its voice mode — several
+cannot — this route skips MCP altogether. Siri runs hands-free in CarPlay
+without any special entitlement, and a Shortcut can call a URL and speak the
+reply. These endpoints exist for that: plain text in, plain text out, short
+enough to be read aloud.
 
 ```
 GET|POST /voice/ask?session=<name>&message=<text>&wait=20
@@ -303,7 +273,7 @@ in three places, deliberately:
    to report back.
 
 These are instructions, not enforcement: a model can still ignore them. Client-side
-settings (ChatGPT's custom instructions, for instance) are a stronger lever and
+settings (your client's own system prompt or custom instructions) are a stronger lever and
 compose with these.
 
 Two details worth knowing if you change this logic:
