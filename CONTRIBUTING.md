@@ -42,6 +42,22 @@ Spawn a throwaway session to test against rather than using one you care about. 
 from inside another Claude Code session, unset `CLAUDE_CODE_CHILD_SESSION` first — otherwise it
 is treated as nested, session persistence is disabled, and it never registers a socket.
 
+## What is in `scripts/`
+
+| Script | Purpose |
+|---|---|
+| `probe.mjs` | Discovery and auth-key derivation. Sends nothing. Start here when something breaks. |
+| `e2e.mjs` | Drives a session over a real stdio MCP client: send, then wait. |
+| `e2e-poll.mjs` | The `send_message` → `get_reply` loop a remote client actually performs. |
+| `e2e-http.mjs` | Streamable HTTP, including the auth rejection paths. |
+| `serve-public.sh` | Server plus a Cloudflare quick tunnel, printing ready-to-paste connector settings. |
+| `tunnel-openai.sh` | Sets up OpenAI's Secure MCP Tunnel against a stdio server. |
+
+`tunnel-openai.sh` is deliberately not in the README. OpenAI's tunnel is an outbound-only
+alternative to exposing a public URL, and it works — but only for clients that can use MCP
+connectors in **text** mode, which rules out the voice case this project is built for. It stays
+here for anyone wiring this into the OpenAI API or Codex, where that limitation does not apply.
+
 ## Style
 
 Match the surrounding code. Comments should explain *why* a non-obvious choice was made, not
