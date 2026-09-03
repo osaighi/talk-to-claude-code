@@ -249,8 +249,10 @@ export async function sendUserMessage(
   const socketPath = session.socketPath
   if (!socketPath) {
     throw new Error(
-      `Session '${session.label}' has no messaging socket. ` +
-        'It predates cross-session messaging or the inbox failed to bind — restart it with a current Claude Code.',
+      `Session '${session.label}' cannot be messaged: it has no messaging socket. ` +
+        `It runs Claude Code ${session.version ?? '(unknown)'}, and the cross-session inbox arrived in 2.1.229. ` +
+        `You can still read it with read_transcript. To send to it, restart it on a current version — ` +
+        `cd ${session.cwd} && claude --resume ${session.sessionId} — which keeps the conversation.`,
     )
   }
 

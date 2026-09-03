@@ -17,6 +17,18 @@ function failure(err: unknown) {
   return { content: [{ type: 'text' as const, text: String(err instanceof Error ? err.message : err) }], isError: true }
 }
 
+/**
+ * Why a session cannot be messaged, and what to do about it. Sessions older than
+ * the cross-session inbox register normally but never bind a socket, so the
+ * answer is always a restart — and resuming keeps the conversation.
+ */
+function sendFix(session: LiveSession): string {
+  return (
+    `this session runs Claude Code ${session.version ?? '(unknown)'}, which predates the messaging socket; ` +
+    `restart it on 2.1.229+ with: cd ${session.cwd} && claude --resume ${session.sessionId}`
+  )
+}
+
 function describe(session: LiveSession): string {
   const bits = [
     `name: ${session.label}`,
@@ -25,7 +37,8 @@ function describe(session: LiveSession): string {
     `pid: ${session.pid}`,
     `cwd: ${session.cwd}`,
     `status: ${session.status ?? 'unknown'}`,
-    `reachable: ${session.socketPath ? 'yes' : 'no (no messaging socket)'}`,
+    `can be messaged: ${session.socketPath ? 'yes' : `no — read-only (${sendFix(session)})`}`,
+    'can be read: yes (transcripts do not need a socket)',
     `remote control: ${session.remoteControlled ? session.bridgeSessionId : 'not mirrored'}`,
   ]
   if (session.version) bits.push(`version: ${session.version}`)
@@ -377,8 +390,9 @@ export function createServer(): McpServer {
 
         if (reachable.length === 0) {
           return text(
-            `No session can be messaged. ${blocked.length} are running but predate the messaging socket — ` +
-              'restart them on a current Claude Code.',
+            `No session can be messaged. ${blocked.length} are running and can still be read with ` +
+              'read_transcript, but they predate the messaging socket — restart them on Claude Code 2.1.229+ ' +
+              'to send to them.',
           )
         }
 
@@ -387,10 +401,10 @@ export function createServer(): McpServer {
         const names = reachable.map(s => s.label).join(', ')
         const rest = include_unreachable
           ? blocked.length > 0
-            ? ` Not reachable: ${blocked.map(s => s.label).join(', ')}.`
+            ? ` Readable but not messageable: ${blocked.map(s => s.label).join(', ')}.`
             : ''
           : blocked.length > 0
-            ? ` (${blocked.length} other${blocked.length > 1 ? 's' : ''} not reachable.)`
+            ? ` (${blocked.length} other${blocked.length > 1 ? 's' : ''} can be read but not messaged.)`
             : ''
         return text(`${reachable.length} session(s) you can drive: ${names}.${rest}${mode}`)
       } catch (err) {

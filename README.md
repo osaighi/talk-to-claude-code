@@ -59,9 +59,12 @@ same transcript.
 ## Requirements
 
 - Node 22+
-- Claude Code **2.1.229 or newer** in the target sessions. Older sessions register themselves but
-  do not bind a messaging socket, so they show up as `reachable: no` and cannot be driven.
-  Restart them on a current version to make them reachable.
+- Claude Code **2.1.229 or newer** to *send* to a session. The cross-session inbox arrived in that
+  version; older sessions register themselves but never bind a socket. Restarting one picks it up,
+  and resuming keeps the conversation: `cd <cwd> && claude --resume <sessionId>`.
+
+*Reading* has no such requirement — `read_transcript` works on any session, whatever its version,
+because transcripts are files on disk.
 
 ## Install
 
