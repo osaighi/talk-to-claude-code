@@ -101,6 +101,17 @@ const MAX_WAIT_SECONDS = 45
 const NARRATION_WAIT_SECONDS = 30
 
 /**
+ * Floor on how long a poll waits, whatever the client asks for.
+ *
+ * Clients pick their own values and pick them short — one asked for 12s and 15s
+ * against a documented default of 25 — which multiplies the polls a task needs
+ * and the chances of the loop being abandoned. This costs nothing when there is
+ * nothing to wait for: the wait is a ceiling, and an idle session settles and
+ * returns in about a second regardless.
+ */
+const MIN_WAIT_SECONDS = 20
+
+/**
  * This server is a conduit between the user and another agent. A client that
  * paraphrases in either direction corrupts the channel, so the expectation is
  * stated in the server instructions, restated on the parameter the client is
@@ -512,9 +523,9 @@ export function createServer(): McpServer {
           .max(NARRATION_WAIT_SECONDS)
           .optional()
           .describe(
-            'How long to wait for activity before returning (default 25, max 30). Each return is your ' +
-              'chance to tell the user what the session is doing, but do not go lower: short waits mean ' +
-              'more polls for the same task, and every extra poll is another chance to lose the thread.',
+            'How long to wait for activity before returning (default 25). Values below 20 are raised to 20: ' +
+              'short waits mean more polls for the same task, and every extra poll is another chance to lose ' +
+              'the thread. It returns as soon as the session settles, so a longer wait costs nothing.',
           ),
       },
     },
@@ -555,7 +566,7 @@ export function createServer(): McpServer {
         const progress = await collectSince(
           target,
           from,
-          Math.min(wait_seconds ?? 25, NARRATION_WAIT_SECONDS) * 1000,
+          Math.max(MIN_WAIT_SECONDS, Math.min(wait_seconds ?? 25, NARRATION_WAIT_SECONDS)) * 1000,
           progressReporter(extra as HandlerExtra),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
