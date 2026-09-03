@@ -70,10 +70,13 @@ const STARTUP_GRACE_MS = 12_000
 const MAX_WAIT_SECONDS = 45
 
 /**
- * get_reply is capped tighter than the client deadline allows. Silence is the
- * real failure mode for a voice user: a client that waits 45s between returns
- * has no opportunity to say anything, so polling is kept brisk to create
- * frequent moments to narrate.
+ * get_reply is capped tighter than the client deadline allows, so each return is
+ * an opportunity for the client to say something to a user who may be driving.
+ *
+ * Do not shorten this further. Halving the wait doubles the number of polls a
+ * task needs, and clients abandon the loop somewhere in that sequence: at 25-30s
+ * one client polled 16 and 18 times to completion, at 12s it stopped after 3 and
+ * missed an answer that landed five seconds later.
  */
 const NARRATION_WAIT_SECONDS = 30
 
@@ -121,7 +124,9 @@ const CONTINUE_DIRECTIVE = (cursor: string, now?: string) =>
   `  1. Tell the user out loud where things stand, in one short sentence${now ? `: "${now}"` : ''}. ` +
   'The user is often driving and hears nothing while you stay silent, so never chain these calls quietly.\n' +
   `  2. Then call get_reply again with since="${cursor}".\n` +
-  'Repeat until state=finished. Never re-send the original prompt — it is already queued and would run twice.'
+  'Repeat until state=finished. Never re-send the original prompt — it is already queued and would run twice.\n' +
+  'If you do stop polling, say so plainly: report what you last saw as what you last saw, not as the outcome. ' +
+  'The session keeps working after you stop looking, and it often finishes seconds later.'
 
 /** Appended to a completed answer, where the client is about to decide how to report it. */
 const RELAY_FOOTER = '\n\n(Report the session\'s answer above verbatim. Do not summarise or rewrite it.)'
@@ -467,8 +472,9 @@ export function createServer(): McpServer {
           .max(NARRATION_WAIT_SECONDS)
           .optional()
           .describe(
-            'How long to wait for activity before returning (default 12, max 30). Kept short on purpose: ' +
-              'each return is your chance to tell the user what the session is doing.',
+            'How long to wait for activity before returning (default 25, max 30). Each return is your ' +
+              'chance to tell the user what the session is doing, but do not go lower: short waits mean ' +
+              'more polls for the same task, and every extra poll is another chance to lose the thread.',
           ),
       },
     },
@@ -481,7 +487,7 @@ export function createServer(): McpServer {
         const progress = await collectSince(
           target,
           from,
-          Math.min(wait_seconds ?? 12, NARRATION_WAIT_SECONDS) * 1000,
+          Math.min(wait_seconds ?? 25, NARRATION_WAIT_SECONDS) * 1000,
           progressReporter(extra as HandlerExtra),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
