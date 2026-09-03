@@ -42,6 +42,51 @@ async function tailBytes(file: string, maxBytes: number): Promise<string> {
 
 const transcriptCache = new Map<string, string>()
 
+/** Cached per transcript, keyed by its mtime so a rename is picked up. */
+const titleCache = new Map<string, { mtimeMs: number; title?: string }>()
+
+/**
+ * The session's real title — what the user named it, and what Remote Control
+ * and claude.ai display.
+ *
+ * The registry only carries a name derived from the working directory
+ * (`tachify-33` for /root/tachify), which is not what the user calls it. The
+ * title lives in the transcript instead, rewritten as a `custom-title` entry
+ * every few turns, so the tail is enough to find the current one.
+ */
+export async function readSessionTitle(sessionId: string): Promise<string | undefined> {
+  const file = await findTranscript(sessionId)
+  if (!file) return undefined
+
+  let mtimeMs: number
+  try {
+    mtimeMs = (await stat(file)).mtimeMs
+  } catch {
+    return undefined
+  }
+  const cached = titleCache.get(sessionId)
+  if (cached && cached.mtimeMs === mtimeMs) return cached.title
+
+  // A small tail: these entries are frequent, and this runs for every session
+  // on every listing.
+  const raw = await tailBytes(file, 512_000)
+  let title: string | undefined
+  for (const line of raw.split('\n').reverse()) {
+    if (!line.includes('"custom-title"')) continue
+    try {
+      const entry = JSON.parse(line) as { type?: string; customTitle?: unknown }
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string' && entry.customTitle.trim()) {
+        title = entry.customTitle.trim()
+        break
+      }
+    } catch {
+      // Truncated or malformed line; keep looking.
+    }
+  }
+  titleCache.set(sessionId, { mtimeMs, title })
+  return title
+}
+
 /** Locate a session's transcript: <projects>/<cwd-slug>/<sessionId>.jsonl. */
 export async function findTranscript(sessionId: string): Promise<string | undefined> {
   const cached = transcriptCache.get(sessionId)

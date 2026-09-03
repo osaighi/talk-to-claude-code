@@ -203,7 +203,10 @@ HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 | `ask` | Send and wait in one call, for short questions |
 | `rename_session` | Change a session's display name |
 
-Sessions are addressed by display name, session id (or a unique prefix), or pid.
+Sessions are addressed by the name you gave them, the registry name, the session id (or a unique
+prefix), or the pid. Results use the name you gave: the registry only carries one derived from the
+working directory — `tachify-33` for a session you call `Tachyo` — which is no help when you are
+naming a session out loud. The real title lives in the transcript and is read from there.
 
 Results are written to be read aloud: short by default, with a `detailed` flag when the user
 actually wants identifiers and paths. A voice client speaks the entire tool result, so a verbose

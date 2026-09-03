@@ -249,7 +249,7 @@ export async function sendUserMessage(
   const socketPath = session.socketPath
   if (!socketPath) {
     throw new Error(
-      `Session '${session.name ?? session.sessionId}' has no messaging socket. ` +
+      `Session '${session.label}' has no messaging socket. ` +
         'It predates cross-session messaging or the inbox failed to bind — restart it with a current Claude Code.',
     )
   }
@@ -280,7 +280,7 @@ export async function sendUserMessage(
 /** Ask a session to change its display name. */
 export async function renameSession(session: LiveSession, name: string): Promise<void> {
   const socketPath = session.socketPath
-  if (!socketPath) throw new Error(`Session '${session.name ?? session.sessionId}' has no messaging socket.`)
+  if (!socketPath) throw new Error(`Session '${session.label}' has no messaging socket.`)
   const token = await readPeerToken(socketPath, session.pid)
   const frames: OutboundFrame[] = []
   if (token) frames.push({ type: 'auth', token })

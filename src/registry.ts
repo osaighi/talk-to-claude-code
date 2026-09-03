@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { defaultSocketPathFor, sessionsDir } from './paths.js'
+import { readSessionTitle } from './transcript.js'
 
 /** Shape of ~/.claude/sessions/<pid>.json, as written by the CLI's session registry. */
 export interface SessionRecord {
@@ -29,6 +30,14 @@ export interface SessionRecord {
 export interface LiveSession extends SessionRecord {
   /** Resolved socket path, present only when a socket actually exists on disk. */
   socketPath?: string
+  /**
+   * What the user actually calls this session, as shown in Remote Control.
+   * The registry's `name` is derived from the working directory and is often
+   * not the name the user would use.
+   */
+  title?: string
+  /** Title if there is one, otherwise the derived name. */
+  label: string
   /** True when this session is mirrored to claude.ai / the mobile app. */
   remoteControlled: boolean
 }
@@ -109,8 +118,11 @@ export async function listSessions(): Promise<LiveSession[]> {
   const live: LiveSession[] = []
   for (const record of records) {
     if (!record || !(await isLive(record))) continue
+    const title = await readSessionTitle(record.sessionId)
     live.push({
       ...record,
+      title,
+      label: title ?? record.name ?? record.sessionId.slice(0, 8),
       socketPath: await resolveSocket(record),
       remoteControlled: typeof record.bridgeSessionId === 'string',
     })
@@ -135,14 +147,15 @@ export async function resolveSession(ref: string): Promise<LiveSession> {
       String(s.pid) === needle ||
       s.sessionId === needle ||
       s.name?.toLowerCase() === lower ||
+      s.title?.toLowerCase() === lower ||
       s.sessionId.startsWith(lower),
   )
 
   if (matches.length === 1) return matches[0]!
   if (matches.length === 0) {
-    const known = sessions.map(s => s.name ?? s.sessionId.slice(0, 8)).join(', ')
+    const known = sessions.map(s => s.label).join(', ')
     throw new Error(`No live session matches '${ref}'. Live sessions: ${known}`)
   }
-  const ambiguous = matches.map(s => `${s.name ?? '(unnamed)'} [${s.sessionId.slice(0, 8)}]`).join(', ')
+  const ambiguous = matches.map(s => `${s.label} [${s.sessionId.slice(0, 8)}]`).join(', ')
   throw new Error(`'${ref}' is ambiguous — it matches ${ambiguous}. Use the pid or a longer session id.`)
 }

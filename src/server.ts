@@ -19,7 +19,8 @@ function failure(err: unknown) {
 
 function describe(session: LiveSession): string {
   const bits = [
-    `name: ${session.name ?? '(unnamed)'}`,
+    `name: ${session.label}`,
+    ...(session.title && session.title !== session.name ? [`registry name: ${session.name}`] : []),
     `id: ${session.sessionId}`,
     `pid: ${session.pid}`,
     `cwd: ${session.cwd}`,
@@ -383,10 +384,10 @@ export function createServer(): McpServer {
 
         // One speakable line. Unreachable sessions are a count, not a list:
         // naming them costs the user seconds of speech for nothing actionable.
-        const names = reachable.map(s => s.name ?? s.sessionId.slice(0, 8)).join(', ')
+        const names = reachable.map(s => s.label).join(', ')
         const rest = include_unreachable
           ? blocked.length > 0
-            ? ` Not reachable: ${blocked.map(s => s.name ?? s.sessionId.slice(0, 8)).join(', ')}.`
+            ? ` Not reachable: ${blocked.map(s => s.label).join(', ')}.`
             : ''
           : blocked.length > 0
             ? ` (${blocked.length} other${blocked.length > 1 ? 's' : ''} not reachable.)`
@@ -461,7 +462,7 @@ export function createServer(): McpServer {
         const target = await resolveSession(session)
         assertWritable(target)
 
-        const label = target.name ?? target.sessionId.slice(0, 8)
+        const label = target.label
 
         // Refuse an exact repeat while the first copy is still unanswered.
         const previous = lastSend.get(target.sessionId)
@@ -543,7 +544,7 @@ export function createServer(): McpServer {
       logCall('get_reply', { session, since, wait_seconds })
       try {
         const target = await resolveSession(session)
-        const label = target.name ?? target.sessionId.slice(0, 8)
+        const label = target.label
         let from = since ?? new Date().toISOString()
 
         // If the last prompt was still queued, everything before the session
@@ -619,7 +620,7 @@ export function createServer(): McpServer {
 
         const sentAt = new Date().toISOString()
         const result = await sendUserMessage(target, message, { receipts, receiptTimeoutMs: 3000 })
-        const label = target.name ?? target.sessionId.slice(0, 8)
+        const label = target.label
 
         if (result.status && result.status !== 'delivered') {
           logCall('ask.result', { session: label, status: result.status })

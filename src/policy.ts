@@ -36,7 +36,12 @@ function isHostSession(session: LiveSession): boolean {
 }
 
 function matches(session: LiveSession, entries: string[]): boolean {
-  const identifiers = [session.name?.toLowerCase(), session.sessionId.toLowerCase(), String(session.pid)].filter(
+  const identifiers = [
+    session.name?.toLowerCase(),
+    session.title?.toLowerCase(),
+    session.sessionId.toLowerCase(),
+    String(session.pid),
+  ].filter(
     (value): value is string => value !== undefined,
   )
   return entries.some(entry => identifiers.includes(entry))
@@ -44,7 +49,7 @@ function matches(session: LiveSession, entries: string[]): boolean {
 
 /** Throw with an actionable message if this session may not be written to. */
 export function assertWritable(session: LiveSession): void {
-  const label = session.name ?? session.sessionId.slice(0, 8)
+  const label = session.label
 
   if (isReadOnly()) {
     throw new Error('This server is running read-only (CLAUDE_REMOTE_MCP_READONLY=1). No messages can be sent.')
