@@ -271,7 +271,13 @@ export async function collectSince(
   // consumed is equally finished.
   const settled = () => idleStreak >= 2 && !startingUp()
 
-  while (!settled() && Date.now() < deadline) {
+  // A session waiting on a human will not move no matter how long we hold the
+  // call, and holding it is now expensive: the budget can be minutes. Give up
+  // as soon as that is clear and say why.
+  let waitingStreak = status === 'waiting' ? 1 : 0
+  const blocked = () => waitingStreak >= 2
+
+  while (!settled() && !blocked() && Date.now() < deadline) {
     await sleep(750)
     turns = await readTurns(session.sessionId, { since, limit: 50 })
     status = (await refresh(session)).status ?? 'unknown'
@@ -282,9 +288,11 @@ export async function collectSince(
       for (const turn of turns.slice(seen)) onActivity?.(speak(turn), ++step)
       seen = turns.length
       idleStreak = 0
+      waitingStreak = 0
       lastBeat = Date.now()
     } else {
       idleStreak = status === 'idle' ? idleStreak + 1 : 0
+      waitingStreak = status === 'waiting' ? waitingStreak + 1 : 0
       if (Date.now() - lastBeat >= HEARTBEAT_MS) {
         const secs = Number.isFinite(sinceMs) ? Math.max(0, Math.round((Date.now() - sinceMs) / 1000)) : 0
         onActivity?.(`Still working (${secs}s)`, seen)
@@ -299,6 +307,33 @@ export async function collectSince(
     done: settled(),
     status,
     elapsedSeconds: Number.isFinite(sinceMs) ? Math.max(0, Math.round((Date.now() - sinceMs) / 1000)) : 0,
+  }
+}
+
+/**
+ * Whatever the client told us about itself at initialize, recorded once.
+ *
+ * Which channels reach the user is a property of the client, not of the
+ * protocol: progress notifications, log messages and elicitation are each
+ * optional. Guessing wastes hours, so this writes down what was actually
+ * negotiated the first time a tool runs.
+ */
+let clientDescribed = false
+function describeClientOnce(server: McpServer): void {
+  if (clientDescribed) return
+  clientDescribed = true
+  try {
+    const info = server.server.getClientVersion()
+    const caps = server.server.getClientCapabilities()
+    logCall('client', {
+      name: info?.name,
+      version: info?.version,
+      capabilities: caps ? Object.keys(caps) : [],
+      elicitation: caps?.elicitation !== undefined,
+      sampling: caps?.sampling !== undefined,
+    })
+  } catch {
+    // Not fatal: this is instrumentation.
   }
 }
 
@@ -320,16 +355,32 @@ function wantsProgress(extra: HandlerExtra | undefined): boolean {
   return extra?._meta?.progressToken !== undefined
 }
 
-function progressReporter(extra: HandlerExtra | undefined): ((summary: string, count: number) => void) | undefined {
+function progressReporter(
+  extra: HandlerExtra | undefined,
+  server?: McpServer,
+): ((summary: string, count: number) => void) | undefined {
+  // Logging is a server capability: it is declared below and always emitted.
+  // Whether a client renders those lines is its own business, but it is a
+  // second chance for intermediate steps to reach the user.
   const token = extra?._meta?.progressToken
-  if (token === undefined || !extra?.sendNotification) return undefined
+  const logs = server !== undefined
+  if ((token === undefined || !extra?.sendNotification) && !logs) return undefined
+
   return (summary, count) => {
-    void extra
-      .sendNotification?.({
-        method: 'notifications/progress',
-        params: { progressToken: token, progress: count, message: summary },
-      })
-      .catch(() => {})
+    if (token !== undefined && extra?.sendNotification) {
+      void extra
+        .sendNotification({
+          method: 'notifications/progress',
+          params: { progressToken: token, progress: count, message: summary },
+        })
+        .catch(() => {})
+    }
+    // Second channel, for clients that show log lines but not progress.
+    if (logs && server) {
+      void server.server
+        .sendLoggingMessage({ level: 'info', logger: 'session', data: summary })
+        .catch(() => {})
+    }
   }
 }
 
@@ -353,6 +404,17 @@ function renderProgress(label: string, progress: Progress): string {
       ? '\nThe session is waiting on human input (a permission prompt or a plan to approve). ' +
         'It cannot progress until the user acts on the machine or from Remote Control.'
       : ''
+
+  // Blocked beats every other reading: no amount of polling clears it, and
+  // telling the client to be patient would strand the user.
+  if (progress.status === 'waiting') {
+    return (
+      `${header}\nSTOP POLLING — the session is waiting on a human decision and cannot continue without it. ` +
+      'Tell the user now: they must answer in the session itself, from Remote Control on their phone or at ' +
+      'the terminal. Reading the last turns with read_transcript will show what it is asking.' +
+      (progress.turns.length > 0 ? `\n\n${formatTurns(progress.turns)}` : '')
+    )
+  }
 
   if (progress.turns.length === 0) {
     return progress.done
@@ -382,6 +444,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     { name: 'talk-to-claude-code', version: '0.1.0' },
     {
+      capabilities: { logging: {} },
       instructions:
         'Drives Claude Code CLI sessions running on this machine through their cross-session messaging socket. ' +
         'Messages land in the target session\'s prompt queue, so a Remote Control client (phone, claude.ai) ' +
@@ -427,6 +490,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ detailed, include_unreachable }) => {
+      describeClientOnce(server)
       try {
         const sessions = await listSessions()
         if (sessions.length === 0) return text('No live Claude Code sessions found.')
@@ -524,6 +588,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ session, message }) => {
+      describeClientOnce(server)
       logCall('send_message', { session, message: brief(message) })
       try {
         const target = await resolveSession(session)
@@ -608,6 +673,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ session, since, wait_seconds }, extra) => {
+      describeClientOnce(server)
       logCall('get_reply', { session, since, wait_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
         const target = await resolveSession(session)
@@ -645,7 +711,7 @@ export function createServer(): McpServer {
           target,
           from,
           budgetFor(extra as HandlerExtra, wait_seconds ?? 25, MIN_WAIT_SECONDS) * 1000,
-          progressReporter(extra as HandlerExtra),
+          progressReporter(extra as HandlerExtra, server),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
         return text(renderProgress(label, progress))
@@ -682,6 +748,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ session, message, timeout_seconds }, extra) => {
+      describeClientOnce(server)
       logCall('ask', { session, message: brief(message), timeout_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
         const target = await resolveSession(session)
@@ -704,7 +771,7 @@ export function createServer(): McpServer {
         // needs no polling at all, which is the only path that cannot be
         // abandoned halfway.
         const budget = budgetFor(extra as HandlerExtra, timeout_seconds, ASK_FLOOR_SECONDS) * 1000
-        const progress = await collectSince(target, since, budget, progressReporter(extra as HandlerExtra))
+        const progress = await collectSince(target, since, budget, progressReporter(extra as HandlerExtra, server))
         logCall('ask.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
         return text(renderProgress(label, progress))
       } catch (err) {
