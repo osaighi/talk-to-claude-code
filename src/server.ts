@@ -135,6 +135,9 @@ const MIN_WAIT_SECONDS = 20
  */
 const ASK_FLOOR_SECONDS = 40
 
+/** How often to emit a progress notification while the session is thinking. */
+const HEARTBEAT_MS = 5_000
+
 /**
  * This server is a conduit between the user and another agent. A client that
  * paraphrases in either direction corrupts the channel, so the expectation is
@@ -219,6 +222,10 @@ export async function collectSince(
   budgetMs: number,
   onActivity?: (summary: string, count: number) => void,
 ): Promise<Progress> {
+  // Heartbeat while the session is quiet. A client that opted into progress
+  // notifications can reset its request deadline on each one, and a voice
+  // client has something to say; without it, thinking time looks like a hang.
+  let lastBeat = Date.now()
   const deadline = Date.now() + budgetMs
   let turns = await readTurns(session.sessionId, { since, limit: 50 })
   let status = (await refresh(session)).status ?? 'unknown'
@@ -249,8 +256,14 @@ export async function collectSince(
       for (const turn of turns.slice(seen)) onActivity?.(speak(turn), ++step)
       seen = turns.length
       idleStreak = 0
+      lastBeat = Date.now()
     } else {
       idleStreak = status === 'idle' ? idleStreak + 1 : 0
+      if (Date.now() - lastBeat >= HEARTBEAT_MS) {
+        const secs = Number.isFinite(sinceMs) ? Math.max(0, Math.round((Date.now() - sinceMs) / 1000)) : 0
+        onActivity?.(`Still working (${secs}s)`, seen)
+        lastBeat = Date.now()
+      }
     }
   }
 
@@ -277,6 +290,10 @@ interface HandlerExtra {
  * it defaults to false, so this complements short calls rather than replacing
  * them.
  */
+function wantsProgress(extra: HandlerExtra | undefined): boolean {
+  return extra?._meta?.progressToken !== undefined
+}
+
 function progressReporter(extra: HandlerExtra | undefined): ((summary: string, count: number) => void) | undefined {
   const token = extra?._meta?.progressToken
   if (token === undefined || !extra?.sendNotification) return undefined
@@ -565,7 +582,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ session, since, wait_seconds }, extra) => {
-      logCall('get_reply', { session, since, wait_seconds })
+      logCall('get_reply', { session, since, wait_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
         const target = await resolveSession(session)
         const label = target.label
@@ -639,7 +656,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ session, message, timeout_seconds }, extra) => {
-      logCall('ask', { session, message: brief(message), timeout_seconds })
+      logCall('ask', { session, message: brief(message), timeout_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
         const target = await resolveSession(session)
         assertWritable(target)
