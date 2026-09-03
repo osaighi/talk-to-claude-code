@@ -275,7 +275,7 @@ export function createServer(): McpServer {
         'Drives Claude Code CLI sessions running on this machine through their cross-session messaging socket. ' +
         'Messages land in the target session\'s prompt queue, so a Remote Control client (phone, claude.ai) ' +
         'watching that session stays in sync and can keep driving it at the same time.\n\n' +
-        'Workflow: call list_sessions first — only sessions marked reachable can be driven. For a quick ' +
+        'Workflow: call list_sessions first — it names the sessions you can drive. For a quick ' +
         'question use ask. For real work use send_message, which returns a cursor, then call get_reply in a ' +
         'loop with that cursor until it reports finished. Sessions take minutes on substantial tasks, so ' +
         'expect several get_reply calls; each one returns the tools the session used, which is how you report ' +
@@ -284,6 +284,7 @@ export function createServer(): McpServer {
         'A short return is normal and is not a failure: state=working means the session is still busy and you ' +
         'must call get_reply again with the cursor. Sending the prompt again instead will run the work twice ' +
         'and still not produce an answer.\n\n' +
+        'Keep it brief out loud. This is often driven by voice, so do not read identifiers, paths or version numbers aloud unless asked — names are enough. Tools take a detailed flag when the user wants more.\n\n' +
         'Speak between polls. The user may be driving and hears nothing while you chain tool calls silently, ' +
         'so each time get_reply returns state=working, say in one short sentence what the session is doing ' +
         'before calling it again. A minute of silence reads as a breakdown, even when work is progressing.\n\n' +
@@ -300,17 +301,52 @@ export function createServer(): McpServer {
     {
       title: 'List Claude Code sessions',
       description:
-        'List every Claude Code CLI session running on this machine, with its name, working directory, ' +
-        'idle/busy status, whether it can be messaged, and whether it is mirrored to Remote Control.',
-      inputSchema: {},
+        'Name the sessions you can drive. Returns one short line by default, because a voice client reads ' +
+        'the whole result aloud. Ask for details only when the user wants them.',
+      inputSchema: {
+        detailed: z
+          .boolean()
+          .optional()
+          .describe('Include cwd, status, version and Remote Control id for each session. Verbose — omit for voice.'),
+        include_unreachable: z
+          .boolean()
+          .optional()
+          .describe('Also name the sessions that cannot be messaged. They are only counted otherwise.'),
+      },
     },
-    async () => {
+    async ({ detailed, include_unreachable }) => {
       try {
         const sessions = await listSessions()
         if (sessions.length === 0) return text('No live Claude Code sessions found.')
-        const body = sessions.map(s => `- ${describe(s)}`).join('\n\n')
-        const mode = isReadOnly() ? '\n\n(server is read-only; write tools are disabled)' : ''
-        return text(`${sessions.length} live session(s):\n\n${body}${mode}`)
+
+        const reachable = sessions.filter(s => s.socketPath)
+        const blocked = sessions.filter(s => !s.socketPath)
+        const mode = isReadOnly() ? ' (read-only: write tools disabled)' : ''
+
+        if (detailed) {
+          const shown = include_unreachable ? sessions : reachable
+          const body = shown.map(s => `- ${describe(s)}`).join('\n\n')
+          return text(`${shown.length} session(s):\n\n${body}${mode}`)
+        }
+
+        if (reachable.length === 0) {
+          return text(
+            `No session can be messaged. ${blocked.length} are running but predate the messaging socket — ` +
+              'restart them on a current Claude Code.',
+          )
+        }
+
+        // One speakable line. Unreachable sessions are a count, not a list:
+        // naming them costs the user seconds of speech for nothing actionable.
+        const names = reachable.map(s => s.name ?? s.sessionId.slice(0, 8)).join(', ')
+        const rest = include_unreachable
+          ? blocked.length > 0
+            ? ` Not reachable: ${blocked.map(s => s.name ?? s.sessionId.slice(0, 8)).join(', ')}.`
+            : ''
+          : blocked.length > 0
+            ? ` (${blocked.length} other${blocked.length > 1 ? 's' : ''} not reachable.)`
+            : ''
+        return text(`${reachable.length} session(s) you can drive: ${names}.${rest}${mode}`)
       } catch (err) {
         return failure(err)
       }

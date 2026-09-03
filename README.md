@@ -195,7 +195,7 @@ HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 
 | Tool | Purpose |
 |---|---|
-| `list_sessions` | Every live session: name, cwd, idle/busy, reachability, Remote Control session id |
+| `list_sessions` | Names the sessions you can drive, in one line. `detailed` adds cwd, status and ids |
 | `session_status` | State of one session |
 | `read_transcript` | Recent turns, including work done from a phone |
 | `send_message` | Queue a prompt, return a cursor immediately |
@@ -204,6 +204,10 @@ HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 | `rename_session` | Change a session's display name |
 
 Sessions are addressed by display name, session id (or a unique prefix), or pid.
+
+Results are written to be read aloud: short by default, with a `detailed` flag when the user
+actually wants identifiers and paths. A voice client speaks the entire tool result, so a verbose
+listing costs the user half a minute of talking to say nothing they can act on.
 
 ### Driving a session
 
