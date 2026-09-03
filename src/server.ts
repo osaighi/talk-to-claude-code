@@ -57,6 +57,26 @@ async function anchorFor(session: LiveSession, message: string, fallback: string
   return undefined
 }
 
+/**
+ * Prompts delivered to a busy session, still waiting their turn in its queue.
+ *
+ * Until the session dequeues one, everything it emits belongs to earlier work.
+ * Reporting those turns as the answer is the mis-attribution this guards
+ * against: get_reply re-checks this on every poll and only starts reading from
+ * the moment our prompt was actually picked up.
+ */
+const pendingDelivery = new Map<string, { text: string; sentAt: string }>()
+
+/**
+ * The last prompt delivered to each session, to catch a client re-sending one.
+ *
+ * Clients do re-send — after a short return, or when they lose track of a call.
+ * Two copies of the same request queue up behind each other, so the answers
+ * arrive shifted by one and every later poll reports the wrong one. Refusing the
+ * duplicate while the first is still in flight is cheaper than untangling that.
+ */
+const lastSend = new Map<string, { text: string; sentAt: string; cursor: string }>()
+
 /** How long after a prompt a still-silent session counts as starting up, not finished. */
 const STARTUP_GRACE_MS = 12_000
 
@@ -420,10 +440,27 @@ export function createServer(): McpServer {
         const target = await resolveSession(session)
         assertWritable(target)
 
+        const label = target.name ?? target.sessionId.slice(0, 8)
+
+        // Refuse an exact repeat while the first copy is still unanswered.
+        const previous = lastSend.get(target.sessionId)
+        if (previous && previous.text === message) {
+          const busy = (await refresh(target)).status !== 'idle'
+          if (busy || pendingDelivery.has(target.sessionId)) {
+            const waited = Math.max(0, Math.round((Date.now() - Date.parse(previous.sentAt)) / 1000))
+            logCall('send_message.duplicate', { session: label, waited })
+            return text(
+              `[session=${label} state=working elapsed=${waited}s cursor="${previous.cursor}"]\n` +
+                'NOT SENT — this exact prompt is already running, delivered ' +
+                `${waited}s ago. Sending it again would run the work twice and shift every later answer ` +
+                `by one.\nCall get_reply with since="${previous.cursor}" instead.`,
+            )
+          }
+        }
+
         const sentAt = new Date().toISOString()
         const result = await sendUserMessage(target, message, { receipts, receiptTimeoutMs: 3000 })
 
-        const label = target.name ?? target.sessionId.slice(0, 8)
         if (result.status && result.status !== 'delivered') {
           logCall('send_message.result', { session: label, status: result.status })
           return text(`Message to '${label}' was ${result.status}. ${result.reason ?? ''}`.trim())
@@ -431,7 +468,10 @@ export function createServer(): McpServer {
 
         const anchor = await anchorFor(target, message, sentAt)
         const cursor = anchor ?? sentAt
-        const queued = anchor === undefined && (await refresh(target)).status !== 'idle'
+        const queued = anchor === undefined
+        if (queued) pendingDelivery.set(target.sessionId, { text: message, sentAt })
+        else pendingDelivery.delete(target.sessionId)
+        lastSend.set(target.sessionId, { text: message, sentAt, cursor })
         logCall('send_message.result', { session: label, cursor, anchored: anchor !== undefined, queued })
 
         return text(
@@ -483,7 +523,35 @@ export function createServer(): McpServer {
       try {
         const target = await resolveSession(session)
         const label = target.name ?? target.sessionId.slice(0, 8)
-        const from = since ?? new Date().toISOString()
+        let from = since ?? new Date().toISOString()
+
+        // If the last prompt was still queued, everything before the session
+        // picked it up belongs to the previous request. Re-check delivery here
+        // and move the cursor forward rather than reporting the wrong answer.
+        const pending = pendingDelivery.get(target.sessionId)
+        if (pending) {
+          const at = await findDeliveredAt(target.sessionId, pending.text)
+          if (at) {
+            pendingDelivery.delete(target.sessionId)
+            if (at > from) from = at
+          } else {
+            const status = (await refresh(target)).status ?? 'unknown'
+            if (status !== 'idle') {
+              const waited = Math.max(0, Math.round((Date.now() - Date.parse(pending.sentAt)) / 1000))
+              logCall('get_reply.result', { session: label, state: 'queued', waited })
+              return text(
+                `[session=${label} state=queued status=${status} elapsed=${waited}s cursor="${from}"]\n` +
+                  'Your prompt is delivered but still waiting its turn — the session is finishing earlier ' +
+                  'work, and anything it produces right now answers that, not you.\n' +
+                  `${CONTINUE_DIRECTIVE(from)}`,
+              )
+            }
+            // Idle without a trace of it: the message was consumed some other
+            // way, or dropped. Stop withholding output on its account.
+            pendingDelivery.delete(target.sessionId)
+          }
+        }
+
         const progress = await collectSince(
           target,
           from,
@@ -536,7 +604,10 @@ export function createServer(): McpServer {
           return text(`Message to '${label}' was ${result.status}. ${result.reason ?? ''}`.trim())
         }
 
-        const since = (await anchorFor(target, message, sentAt)) ?? sentAt
+        const anchored = await anchorFor(target, message, sentAt)
+        if (anchored === undefined) pendingDelivery.set(target.sessionId, { text: message, sentAt })
+        else pendingDelivery.delete(target.sessionId)
+        const since = anchored ?? sentAt
         const budget = Math.min(timeout_seconds ?? 25, NARRATION_WAIT_SECONDS) * 1000
         const progress = await collectSince(target, since, budget, progressReporter(extra as HandlerExtra))
         logCall('ask.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
