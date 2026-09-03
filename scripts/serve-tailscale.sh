@@ -73,7 +73,12 @@ cat <<EOF
      "server_url": "$PUBLIC/mcp",
      "authorization": "$TOKEN"}
 
-  Grok app: grok.com/connectors -> New Connector -> Custom -> $PUBLIC/mcp
+  Grok app: grok.com/connectors -> New Connector -> Custom, with auth set to none:
+
+    $PUBLIC/mcp/$TOKEN
+
+  Use that token-in-path URL, not the bare /mcp: a bare first request gets a 401,
+  which clients interpret as an OAuth requirement and then prompt for credentials.
 
   Stop with: bash scripts/serve-tailscale.sh --stop
 EOF

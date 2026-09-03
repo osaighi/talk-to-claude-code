@@ -89,7 +89,8 @@ cat <<EOF
      "server_url": "$PUBLIC/mcp",
      "authorization": "$TOKEN"}
 
-  Grok app: grok.com/connectors -> New Connector -> Custom -> $PUBLIC/mcp
+  Grok app: grok.com/connectors -> New Connector -> Custom, auth none:
+    $PUBLIC/mcp/$TOKEN     (token in the path: a bare /mcp 401s and triggers an OAuth prompt)
 
   Stop with: bash scripts/serve-public.sh --stop
 EOF

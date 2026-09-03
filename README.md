@@ -119,8 +119,20 @@ needs no account, but the URL changes on every restart:
 bash scripts/serve-public.sh
 ```
 
-Then either add it in the app — `grok.com/connectors` → New Connector → **Custom** → your URL —
-or declare it in an xAI API call. The API path accepts a proper `Authorization` header:
+Then add it in the app: `grok.com/connectors` → New Connector → **Custom**. Give it the URL with
+the **secret in the path**, and pick no authentication:
+
+```
+https://<your-host>:8443/mcp/<token>
+```
+
+That matters. On the bare `/mcp` URL the client's first request arrives with no credentials, the
+server answers `401`, and clients read that as "this server wants OAuth" — Grok then asks for a
+client ID, authorize and token endpoints, none of which exist here. Putting the secret in the URL
+means no request is ever unauthenticated, so the OAuth prompt never appears. A `token=` query
+parameter works too.
+
+Over the API you can instead send a proper `Authorization` header:
 
 ```jsonc
 tools: [{
