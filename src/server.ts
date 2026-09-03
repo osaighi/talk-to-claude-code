@@ -117,6 +117,14 @@ const MIN_WAIT_SECONDS = 20
  * stated in the server instructions, restated on the parameter the client is
  * about to fill in, and restated again on the answer it is about to report.
  */
+const ROUTING_RULE =
+  'WHEN TO USE THIS: any question or instruction about the user\'s own projects, code, repositories, ' +
+  'machine, builds, deployments or work in progress belongs to a session — relay it. You do not know ' +
+  'what is on their disk, and neither does a web search. Do not answer from your own knowledge, do not ' +
+  'search the web, and do not ask clarifying questions the session could answer better: pass it through ' +
+  'and let the session look. Answer in your own voice only when the user asks about you, or about how ' +
+  'this connector itself works.\n\n'
+
 const RELAY_DISCIPLINE =
   'Relay discipline: you are a conduit to another agent, not an intermediary who improves on either side. ' +
   "Pass the user's request through word for word, in their original language — never rephrase, translate, " +
@@ -328,6 +336,7 @@ export function createServer(): McpServer {
         'and the first minute often produces no visible step at all. Several polls returning no new output do ' +
         'NOT mean it has stalled — the elapsed counter in each result shows it is still running. Give up only ' +
         'if the result says the session is waiting on human input, or if elapsed passes about fifteen minutes.\n\n' +
+        ROUTING_RULE +
         RELAY_DISCIPLINE,
     },
   )
@@ -436,6 +445,7 @@ export function createServer(): McpServer {
     {
       title: 'Send a message to a session',
       description:
+        ROUTING_RULE +
         'Queue a prompt in a running session and return immediately with a cursor. The message enters that ' +
         'session as if typed, so it is also visible to any Remote Control client watching it. ' +
         'Follow up with get_reply, passing the cursor as `since`, to watch the session work. ' +
@@ -582,6 +592,7 @@ export function createServer(): McpServer {
     {
       title: 'Ask a session and wait for its reply',
       description:
+        ROUTING_RULE +
         'Send a prompt and wait for the answer in one call. Best for short questions. If the session is still ' +
         'working when the wait runs out, this returns the output so far plus a cursor — continue with get_reply ' +
         'rather than calling ask again, which would send the prompt a second time.',
