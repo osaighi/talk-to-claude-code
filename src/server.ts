@@ -126,6 +126,16 @@ const NARRATION_WAIT_SECONDS = 30
 const MIN_WAIT_SECONDS = 20
 
 /**
+ * ask blocks longer than get_reply, and ignores a client asking for less.
+ *
+ * Polling is the fragile part — clients abandon the loop — so the best outcome
+ * is a task that fits in the first call and never needs one. Sitting close to
+ * the 60s client deadline buys that for most short requests; progress
+ * notifications still report activity while it waits.
+ */
+const ASK_FLOOR_SECONDS = 40
+
+/**
  * This server is a conduit between the user and another agent. A client that
  * paraphrases in either direction corrupts the channel, so the expectation is
  * stated in the server instructions, restated on the parameter the client is
@@ -618,11 +628,13 @@ export function createServer(): McpServer {
           .number()
           .int()
           .min(5)
-          .max(NARRATION_WAIT_SECONDS)
+          .max(MAX_WAIT_SECONDS)
           .optional()
           .describe(
-            `How long to wait before returning partial output and a cursor (default 25, max ${NARRATION_WAIT_SECONDS}). ` +
-              'Capped deliberately: MCP clients abort a request at 60s.',
+            `How long to wait for the answer before returning partial output and a cursor (default and max ` +
+              `${MAX_WAIT_SECONDS}s; values below ${ASK_FLOOR_SECONDS} are raised to it). Do not shorten this: ` +
+              'an answer that arrives inside this call needs no polling at all, and polling is where answers ' +
+              'get lost. The 60s client deadline is the only reason it is not longer.',
           ),
       },
     },
@@ -645,7 +657,10 @@ export function createServer(): McpServer {
         if (anchored === undefined) pendingDelivery.set(target.sessionId, { text: message, sentAt })
         else pendingDelivery.delete(target.sessionId)
         const since = anchored ?? sentAt
-        const budget = Math.min(timeout_seconds ?? 25, NARRATION_WAIT_SECONDS) * 1000
+        // Use the whole window a client allows. Anything that finishes inside it
+        // needs no polling at all, which is the only path that cannot be
+        // abandoned halfway.
+        const budget = Math.max(ASK_FLOOR_SECONDS, Math.min(timeout_seconds ?? MAX_WAIT_SECONDS, MAX_WAIT_SECONDS)) * 1000
         const progress = await collectSince(target, since, budget, progressReporter(extra as HandlerExtra))
         logCall('ask.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
         return text(renderProgress(label, progress))
