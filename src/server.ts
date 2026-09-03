@@ -139,6 +139,32 @@ const ASK_FLOOR_SECONDS = 40
 const HEARTBEAT_MS = 5_000
 
 /**
+ * Budget for a client that subscribed to progress notifications.
+ *
+ * The 60s ceiling exists because an idle request times out. A client that sets
+ * resetTimeoutOnProgress restarts that clock on every notification, and this
+ * server heartbeats every 5s — so such a client can be held for the length of
+ * the task itself, and one call returns the finished answer with no polling.
+ * Polling is where answers get lost, so this is worth reaching for.
+ *
+ * Subscribing to progress does not prove the client resets on it. If calls start
+ * failing at ~60s, set CLAUDE_REMOTE_MCP_LONG_WAIT=0 to fall back.
+ */
+function longWaitSeconds(): number {
+  const raw = process.env.CLAUDE_REMOTE_MCP_LONG_WAIT
+  if (raw === undefined) return 240
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 240
+}
+
+/** The ceiling for this call: long only if the client is listening for progress. */
+function budgetFor(extra: HandlerExtra | undefined, requested: number | undefined, floor: number): number {
+  const long = wantsProgress(extra) ? longWaitSeconds() : 0
+  if (long > 0) return Math.max(floor, requested ?? long, long)
+  return Math.max(floor, Math.min(requested ?? MAX_WAIT_SECONDS, MAX_WAIT_SECONDS))
+}
+
+/**
  * This server is a conduit between the user and another agent. A client that
  * paraphrases in either direction corrupts the channel, so the expectation is
  * stated in the server instructions, restated on the parameter the client is
@@ -618,7 +644,7 @@ export function createServer(): McpServer {
         const progress = await collectSince(
           target,
           from,
-          Math.max(MIN_WAIT_SECONDS, Math.min(wait_seconds ?? 25, NARRATION_WAIT_SECONDS)) * 1000,
+          budgetFor(extra as HandlerExtra, wait_seconds ?? 25, MIN_WAIT_SECONDS) * 1000,
           progressReporter(extra as HandlerExtra),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
@@ -677,7 +703,7 @@ export function createServer(): McpServer {
         // Use the whole window a client allows. Anything that finishes inside it
         // needs no polling at all, which is the only path that cannot be
         // abandoned halfway.
-        const budget = Math.max(ASK_FLOOR_SECONDS, Math.min(timeout_seconds ?? MAX_WAIT_SECONDS, MAX_WAIT_SECONDS)) * 1000
+        const budget = budgetFor(extra as HandlerExtra, timeout_seconds, ASK_FLOOR_SECONDS) * 1000
         const progress = await collectSince(target, since, budget, progressReporter(extra as HandlerExtra))
         logCall('ask.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
         return text(renderProgress(label, progress))
