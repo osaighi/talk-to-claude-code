@@ -100,20 +100,24 @@ mode behind a tunnel of your choice — Tailscale Funnel gives a stable hostname
 domain, which matters because a connector has to be reconfigured every time the URL changes:
 
 ```bash
-CLAUDE_REMOTE_MCP_TOKEN="$(openssl rand -hex 24)" node dist/index.js --http
-tailscale funnel --bg --https=8443 8787      # stable hostname, survives restarts
+bash scripts/serve-tailscale.sh       # READONLY=1 to expose observation only
+bash scripts/serve-tailscale.sh --stop
 ```
 
-Or, to get going in one command with a throwaway URL, `scripts/serve-public.sh` generates a
-secret, starts the server, opens a Cloudflare quick tunnel and prints the connector settings:
+That generates a secret on first run and reuses it afterwards, starts the server, puts it behind
+Funnel and prints the connector settings. The hostname is stable, so the connector is configured
+once and later restarts stay invisible to it — worth the setup, because reconfiguring a connector
+after every restart gets old fast.
+
+Funnel only accepts ports 443, 8443 and 10000; the script defaults to 8443 and leaves any
+existing mapping on 443 alone. Override with `FUNNEL_PORT=` and `PORT=`.
+
+Without Tailscale, `scripts/serve-public.sh` does the same through a Cloudflare quick tunnel. It
+needs no account, but the URL changes on every restart:
 
 ```bash
-bash scripts/serve-public.sh          # READONLY=1 to expose observation only
-bash scripts/serve-public.sh --stop
+bash scripts/serve-public.sh
 ```
-
-Quick tunnels are fine for a first test but the URL changes on every restart, which means
-reconfiguring the connector each time — move to a stable hostname once it works.
 
 Then either add it in the app — `grok.com/connectors` → New Connector → **Custom** → your URL —
 or declare it in an xAI API call. The API path accepts a proper `Authorization` header:

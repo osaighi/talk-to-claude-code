@@ -50,7 +50,8 @@ is treated as nested, session persistence is disabled, and it never registers a 
 | `e2e.mjs` | Drives a session over a real stdio MCP client: send, then wait. |
 | `e2e-poll.mjs` | The `send_message` → `get_reply` loop a remote client actually performs. |
 | `e2e-http.mjs` | Streamable HTTP, including the auth rejection paths. |
-| `serve-public.sh` | Server plus a Cloudflare quick tunnel, printing ready-to-paste connector settings. |
+| `serve-tailscale.sh` | Server behind Tailscale Funnel: a stable hostname, so a connector survives restarts. |
+| `serve-public.sh` | Same, through a Cloudflare quick tunnel — no account needed, but a throwaway URL. |
 | `tunnel-openai.sh` | Sets up OpenAI's Secure MCP Tunnel against a stdio server. |
 
 `tunnel-openai.sh` is deliberately not in the README. OpenAI's tunnel is an outbound-only
