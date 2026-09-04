@@ -229,7 +229,16 @@ get_reply     -> [session=my-session state=finished ... cursor="…35.729Z"]   #
 
 Every result leads with a machine-readable state line, so the decision to poll
 again never depends on reading prose. `state=working` means call `get_reply`
-again with the returned cursor; `state=finished` means stop. Assistant turns
+again with the returned cursor; `state=finished` means stop.
+
+A third state matters more than it looks: `state=needs_answer`. A session that
+ends its turn by asking the user something goes idle exactly like one that
+finished the job, so without this it reads as done and the pending decision is
+never surfaced — the user hears a report, answers out loud, and the answer goes
+nowhere. On `needs_answer` the client must put the question to the user and send
+their reply back with `send_message`. Detection is by wording, since nothing in
+the transcript marks a question: `scripts/test-asks.mjs` pins the awkward cases,
+including requests that end in a full stop rather than a question mark. Assistant turns
 list the tools the session used, which is the progress signal during a long
 task.
 

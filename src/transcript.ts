@@ -211,6 +211,33 @@ export async function findDeliveredAt(sessionId: string, body: string): Promise<
   return undefined
 }
 
+/**
+ * Wording that solicits an answer without ending in a question mark.
+ *
+ * "Dis-moi lequel j'attaque." is a question in every sense that matters here,
+ * and it ends with a full stop. Both languages this is used in are covered.
+ */
+const SOLICITATION =
+  /\b(dis[- ]moi|dites[- ]moi|pr\u00e9viens[- ]moi|veux[- ]tu|voulez[- ]vous|souhaites[- ]tu|souhaitez[- ]vous|dois[- ]je|tu veux que|je te laisse choisir|\u00e0 toi de voir|let me know|tell me which|which one do you|do you want me|would you like me|shall i|should i proceed|your call)\b/i
+
+/**
+ * Does the session's closing turn put a question to the user?
+ *
+ * A session that ends its turn by asking something goes idle exactly like one
+ * that finished the job, so without this the caller reports "finished" and the
+ * user never learns a decision is pending. Nothing in the transcript marks it —
+ * an asked question is ordinary assistant text — so detection is by wording,
+ * over the last few lines only, where a closing question actually sits.
+ */
+export function asksForInput(turns: Turn[]): boolean {
+  const last = [...turns].reverse().find(t => t.role === 'assistant' && t.text.trim())
+  if (!last) return false
+  const lines = last.text.split('\n').map(l => l.trim()).filter(Boolean).slice(-3)
+  // Trailing markdown would hide the question mark from a naive endsWith.
+  if (lines.some(l => /\?$/.test(l.replace(/[*_`~)\]]+$/, '').trim()))) return true
+  return lines.some(l => SOLICITATION.test(l))
+}
+
 /** Render turns as readable text for a tool result. */
 export function formatTurns(turns: Turn[]): string {
   if (turns.length === 0) return '(no new output)'

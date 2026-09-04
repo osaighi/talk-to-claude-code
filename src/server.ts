@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { ReceiptListener, renameSession, sendUserMessage } from './peer.js'
 import { assertWritable, isReadOnly } from './policy.js'
 import { listSessions, resolveSession, type LiveSession } from './registry.js'
-import { findDeliveredAt, formatTurns, readTurns, type Turn } from './transcript.js'
+import { asksForInput, findDeliveredAt, formatTurns, readTurns, type Turn } from './transcript.js'
 import { brief, logCall } from './log.js'
 
 /** Shared across every MCP session this process serves. */
@@ -220,6 +220,22 @@ const CONTINUE_DIRECTIVE = (cursor: string, now?: string) =>
   'If you do stop polling, say so plainly: report what you last saw as what you last saw, not as the outcome. ' +
   'The session keeps working after you stop looking, and it often finishes seconds later.'
 
+/**
+ * Replaces the relay footer when the session stopped to ask something.
+ *
+ * This is the step clients miss: they read the question out, the user answers
+ * aloud, and the answer goes nowhere because nothing said it had to be sent
+ * back. For a user who is driving, that reads as the assistant ignoring them.
+ */
+const ANSWER_DIRECTIVE = (label: string) =>
+  '\n\nNOT DONE — the session ended its turn by asking the user something, and is now idle waiting for the ' +
+  'answer. It will not go further on its own.\n' +
+  'REQUIRED, in this order:\n' +
+  '  1. Put its question to the user in their language, in the session\'s own words.\n' +
+  '  2. Wait for their answer — do not answer on their behalf, and do not guess.\n' +
+  `  3. Send that answer back with send_message session="${label}", then follow it with get_reply as usual.\n` +
+  'If the user replies with something else entirely, send that instead: they are allowed to change course.'
+
 /** Appended to a completed answer, where the client is about to decide how to report it. */
 const RELAY_FOOTER = '\n\n(Report the session\'s answer above verbatim. Do not summarise or rewrite it.)'
 
@@ -232,6 +248,8 @@ interface Progress {
   status: string
   /** Seconds since the prompt was picked up, so each poll differs even with no output. */
   elapsedSeconds: number
+  /** The session stopped to ask the user something and expects an answer back. */
+  awaitingAnswer: boolean
 }
 
 /**
@@ -307,6 +325,9 @@ export async function collectSince(
     done: settled(),
     status,
     elapsedSeconds: Number.isFinite(sinceMs) ? Math.max(0, Math.round((Date.now() - sinceMs) / 1000)) : 0,
+    // Only meaningful once it has stopped: mid-task text often reads like a
+    // question the session is about to answer itself.
+    awaitingAnswer: settled() && asksForInput(turns),
   }
 }
 
@@ -393,8 +414,11 @@ function renderProgress(label: string, progress: Progress): string {
   // Elapsed time is in the header on purpose: with no new output the response
   // would otherwise be byte-identical poll after poll, and a model reading three
   // identical results concludes nothing is happening and gives up.
+  // needs_answer is deliberately distinct from finished: both are idle, but one
+  // is over and the other is a conversation stalled on the user.
+  const state = progress.done ? (progress.awaitingAnswer ? 'needs_answer' : 'finished') : 'working'
   const header =
-    `[session=${label} state=${progress.done ? 'finished' : 'working'} ` +
+    `[session=${label} state=${state} ` +
     `status=${progress.status} elapsed=${progress.elapsedSeconds}s cursor="${progress.cursor}"]`
 
   // 'waiting' means the session wants something from a human — a permission
@@ -425,7 +449,8 @@ function renderProgress(label: string, progress: Progress): string {
         `${CONTINUE_DIRECTIVE(progress.cursor)}${blocked}`
   }
   if (progress.done) {
-    return `${header}\n\n${formatTurns(progress.turns)}${RELAY_FOOTER}`
+    const closing = progress.awaitingAnswer ? ANSWER_DIRECTIVE(label) : RELAY_FOOTER
+    return `${header}\n\n${formatTurns(progress.turns)}${closing}`
   }
   // Front-load one speakable line: a voice client should be able to say where
   // things stand without reading the transcript aloud.
@@ -454,6 +479,9 @@ export function createServer(): McpServer {
         'loop with that cursor until it reports finished. Sessions take minutes on substantial tasks, so ' +
         'expect several get_reply calls; each one returns the tools the session used, which is how you report ' +
         'progress. Never re-send a prompt because a call returned early — that queues the work twice.\n\n' +
+        'A result can come back state=needs_answer instead of finished. That means the session stopped to ask ' +
+        'the user something and is idle waiting on them — the task is not done. Put its question to the user, ' +
+        'wait for their reply, and send that reply back with send_message. Never answer on their behalf.\n\n' +
         'Every call here returns within about 45 seconds by design, because MCP clients abort a request at 60. ' +
         'A short return is normal and is not a failure: state=working means the session is still busy and you ' +
         'must call get_reply again with the cursor. Sending the prompt again instead will run the work twice ' +

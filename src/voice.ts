@@ -63,7 +63,10 @@ export async function voiceAsk(session: string, message: string, waitSeconds: nu
 
   if (progress.done) {
     const answer = answerFrom(progress.turns)
-    return answer || 'Done, but it did not say anything.'
+    if (!answer) return 'Done, but it did not say anything.'
+    // Spoken aloud, a question and a conclusion sound identical unless the
+    // difference is said out loud — and the driver has to know one is expected.
+    return progress.awaitingAnswer ? `${answer} — it is waiting for your answer.` : answer
   }
   const last = progress.turns.at(-1)
   return last
@@ -85,7 +88,8 @@ export async function voiceReply(session: string, since: string | undefined, wai
   }
   if (progress.done) {
     const answer = answerFrom(progress.turns)
-    return answer || 'Nothing new. It is finished and idle.'
+    if (!answer) return 'Nothing new. It is finished and idle.'
+    return progress.awaitingAnswer ? `${answer} — it is waiting for your answer.` : answer
   }
   const last = progress.turns.at(-1)
   return last ? `Still working. ${speak(last)}.` : 'Still working. Nothing new yet.'
