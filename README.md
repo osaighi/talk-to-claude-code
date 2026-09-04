@@ -253,12 +253,22 @@ Control, or the terminal. Two measurements say why:
 
 - An ordinary message queues *behind* the form. On a session parked on a question, it had still
   not been seen 93s later, with the form untouched.
-- A message sent with `interrupt: true` jumps the queue and does dismiss the prompt — but the
-  session records it as **declined**, not answered, and says as much: a relayed claim is not the
-  user's decision. That is a deliberate property of the CLI, not a gap to work around.
+- A message sent with `interrupt: true` jumps the queue and dismisses the prompt — but the session
+  records it as **declined**, not answered, and says so: a relayed claim is not the user's decision.
 
-So `interrupt` is for dropping a question the user does not want to answer, letting the session
-move on with a new instruction. It is not a way to answer one.
+This is not a gap to close. Everything through the messaging inbox is stamped as a peer by the
+receiving CLI, using the connecting process's kernel-verified credentials (`SO_PEERCRED`) — not a
+field the sender controls. There is no inbox action to submit a form answer, and no way to make a
+message count as the user. The only inputs that authenticate *as the user* are the session's own
+terminal and Remote Control (the phone). Answering a question is therefore done there; the
+connector cannot, by construction.
+
+`plain_questions` (default on) reduces how often this bites: it asks the session to put follow-up
+questions in plain text instead of an `AskUserQuestion` form. The session then stays idle and
+conversational rather than hard-blocking, so a relayed instruction can redirect it — but it still
+cannot *answer* a pending question. Combine it with autonomy guidance ("decide the details
+yourself, only ask on the big calls") to make questions rare. `interrupt` drops a question the
+user would rather not answer at all.
 
 ### Voice endpoints (Siri Shortcuts)
 

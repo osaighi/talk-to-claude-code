@@ -211,6 +211,20 @@ export function speak(turn: Turn): string {
 }
 
 /** Sits on the parameter the client is about to fill in — the highest-leverage spot. */
+/**
+ * A note the relay adds, never the user, asking the session to ask in prose.
+ *
+ * AskUserQuestion renders a form only the real user can fill; a relayed answer
+ * is refused by design. So a voice-driven session should not put one up. This
+ * is appended below the user's message, fenced and attributed, so their words
+ * stay verbatim above it.
+ */
+const PLAIN_QUESTIONS_NOTE =
+  '\n\n— relay note (not from the user) —\n' +
+  'The user is driving and answering by voice through a connector. If you need to ask them anything, ask ' +
+  'in plain sentences, not with AskUserQuestion: they cannot fill a form from where they are, and a relayed ' +
+  'answer to one is rejected. A plain-text question they can just answer in words.'
+
 const VERBATIM =
   "The prompt to deliver, copied word for word from what the user wrote, in their original language. " +
   'Do not rephrase, translate, summarise, expand, or add framing of your own — the receiving agent must ' +
@@ -646,6 +660,15 @@ export function createServer(): McpServer {
       inputSchema: {
         session: z.string().describe('Session name, session id (or unique prefix), or pid.'),
         message: z.string().min(1).describe(VERBATIM),
+        plain_questions: z
+          .boolean()
+          .optional()
+          .describe(
+            'Append a short relay note asking the session to ask any follow-up in plain text rather than an ' +
+              'AskUserQuestion form, which cannot be answered remotely (default true). The note is fenced and ' +
+              "marked as coming from the relay, so the user's own words stay verbatim. Set false to send the " +
+              'message with nothing added.',
+          ),
         interrupt: z
           .boolean()
           .optional()
@@ -657,9 +680,9 @@ export function createServer(): McpServer {
           ),
       },
     },
-    async ({ session, message, interrupt }) => {
+    async ({ session, message, plain_questions, interrupt }) => {
       describeClientOnce(server)
-      logCall('send_message', { session, message: brief(message) })
+      logCall('send_message', { session, message: brief(message), plainQ: plain_questions !== false })
       try {
         const target = await resolveSession(session)
         assertWritable(target)
@@ -683,7 +706,8 @@ export function createServer(): McpServer {
         }
 
         const sentAt = new Date().toISOString()
-        const result = await sendUserMessage(target, message, {
+        const delivered = plain_questions === false ? message : message + PLAIN_QUESTIONS_NOTE
+        const result = await sendUserMessage(target, delivered, {
           receipts,
           receiptTimeoutMs: 3000,
           interrupt: interrupt === true,
@@ -694,10 +718,10 @@ export function createServer(): McpServer {
           return text(`Message to '${label}' was ${result.status}. ${result.reason ?? ''}`.trim())
         }
 
-        const anchor = await anchorFor(target, message, sentAt)
+        const anchor = await anchorFor(target, delivered, sentAt)
         const cursor = anchor ?? sentAt
         const queued = anchor === undefined
-        if (queued) pendingDelivery.set(target.sessionId, { text: message, sentAt })
+        if (queued) pendingDelivery.set(target.sessionId, { text: delivered, sentAt })
         else pendingDelivery.delete(target.sessionId)
         lastSend.set(target.sessionId, { text: message, sentAt, cursor })
         logCall('send_message.result', { session: label, cursor, anchored: anchor !== undefined, queued })
@@ -841,6 +865,14 @@ export function createServer(): McpServer {
       inputSchema: {
         session: z.string().describe('Session name, session id (or unique prefix), or pid.'),
         message: z.string().min(1).describe(VERBATIM),
+        plain_questions: z
+          .boolean()
+          .optional()
+          .describe(
+            'Append a relay note asking the session to ask any follow-up in plain text rather than an ' +
+              'AskUserQuestion form, which cannot be answered remotely (default true). Fenced and attributed, ' +
+              "so the user's words stay verbatim.",
+          ),
         timeout_seconds: z
           .number()
           .int()
@@ -855,7 +887,7 @@ export function createServer(): McpServer {
           ),
       },
     },
-    async ({ session, message, timeout_seconds }, extra) => {
+    async ({ session, message, plain_questions, timeout_seconds }, extra) => {
       describeClientOnce(server)
       logCall('ask', { session, message: brief(message), timeout_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
@@ -863,7 +895,8 @@ export function createServer(): McpServer {
         assertWritable(target)
 
         const sentAt = new Date().toISOString()
-        const result = await sendUserMessage(target, message, { receipts, receiptTimeoutMs: 3000 })
+        const delivered = plain_questions === false ? message : message + PLAIN_QUESTIONS_NOTE
+        const result = await sendUserMessage(target, delivered, { receipts, receiptTimeoutMs: 3000 })
         const label = target.label
 
         if (result.status && result.status !== 'delivered') {
@@ -871,7 +904,7 @@ export function createServer(): McpServer {
           return text(`Message to '${label}' was ${result.status}. ${result.reason ?? ''}`.trim())
         }
 
-        const anchored = await anchorFor(target, message, sentAt)
+        const anchored = await anchorFor(target, delivered, sentAt)
         if (anchored === undefined) pendingDelivery.set(target.sessionId, { text: message, sentAt })
         else pendingDelivery.delete(target.sessionId)
         const since = anchored ?? sentAt
