@@ -451,10 +451,11 @@ function renderProgress(label: string, progress: Progress): string {
     if (progress.questions.length > 0) {
       return (
         `${header}\nSTOP POLLING — the session put a question to the user and cannot continue until it is ` +
-        'answered. Read it out with its options, then tell them plainly that they have to answer it in the ' +
-        'session itself: in the Claude app over Remote Control, or at the terminal. Answering through this ' +
-        'connector does NOT work — the message is accepted but queues behind the form, so it only arrives ' +
-        'after someone has already dismissed it.\n\n' +
+        'answered. Read it out with its options, then tell them plainly that the answer has to be given in ' +
+        'the session itself: in the Claude app over Remote Control, or at the terminal. Relaying their ' +
+        'choice here does NOT answer it — an ordinary message queues behind the form untouched, and the ' +
+        'session refuses to take a relayed claim as the user\'s decision. What you can do, if they would ' +
+        'rather drop the question, is send their next instruction with interrupt=true to dismiss it.\n\n' +
         `${formatQuestions(progress.questions)}`
       )
     }
@@ -645,9 +646,18 @@ export function createServer(): McpServer {
       inputSchema: {
         session: z.string().describe('Session name, session id (or unique prefix), or pid.'),
         message: z.string().min(1).describe(VERBATIM),
+        interrupt: z
+          .boolean()
+          .optional()
+          .describe(
+            'Deliver ahead of the queue, dismissing whatever prompt the session is parked on (default false). ' +
+              'Use it only when the user says to cancel or stop — it does NOT answer a question the session ' +
+              'asked: the session records the prompt as declined and will not take a relayed claim as the ' +
+              "user's decision. Their real answer has to be given in the session itself.",
+          ),
       },
     },
-    async ({ session, message }) => {
+    async ({ session, message, interrupt }) => {
       describeClientOnce(server)
       logCall('send_message', { session, message: brief(message) })
       try {
@@ -673,7 +683,11 @@ export function createServer(): McpServer {
         }
 
         const sentAt = new Date().toISOString()
-        const result = await sendUserMessage(target, message, { receipts, receiptTimeoutMs: 3000 })
+        const result = await sendUserMessage(target, message, {
+          receipts,
+          receiptTimeoutMs: 3000,
+          interrupt: interrupt === true,
+        })
 
         if (result.status && result.status !== 'delivered') {
           logCall('send_message.result', { session: label, status: result.status })
@@ -771,7 +785,10 @@ export function createServer(): McpServer {
                   `[session=${label} state=blocked status=${status} elapsed=${waited}s cursor="${from}"]\n` +
                     `SPEAK: ${label} is stuck on a question and cannot take your message until it is answered ` +
                     'in the Claude app or at the terminal.\n' +
-                    'STOP POLLING until the user says they have answered. Read the question below out loud.' +
+                    'STOP POLLING until the user says they have answered. Read the question below out loud. ' +
+                    'If they would rather drop the question than answer it, send their instruction with ' +
+                    'interrupt=true: that dismisses the prompt and lets the session move on. It does not ' +
+                    'answer it — the session treats a dismissed prompt as declined.' +
                     (questions.length > 0 ? `\n\n${formatQuestions(questions)}` : ''),
                 )
               }

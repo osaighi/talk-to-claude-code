@@ -234,6 +234,16 @@ export interface SendOptions {
   /** How long to wait for a delivery receipt before returning. */
   receiptTimeoutMs?: number
   receipts?: ReceiptListener
+  /**
+   * Deliver ahead of the queue instead of behind it.
+   *
+   * The recipient handles a `now` message immediately rather than through its
+   * processing chain, which also dismisses whatever prompt it is parked on. It
+   * does not answer that prompt — the recipient records it as declined and will
+   * not accept a peer's claim as the user's decision — so this unsticks a
+   * session, it does not decide for anyone.
+   */
+  interrupt?: boolean
 }
 
 /**
@@ -270,6 +280,7 @@ export async function sendUserMessage(
     message: { role: 'user', content },
     msg_id: msgId,
     ...(from ? { from } : {}),
+    ...(options.interrupt ? { priority: 'now' } : {}),
   })
 
   const pending = options.receipts?.await(msgId, options.receiptTimeoutMs ?? 0)

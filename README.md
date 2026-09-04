@@ -249,10 +249,16 @@ waits. Results carry the question and its options verbatim, so a relayed client 
 instead of reporting that nothing is happening.
 
 The answer, though, has to be given **in the session itself** — the Claude app over Remote
-Control, or the terminal. A message sent through this server is accepted but queues behind the
-form: measured on a session parked on a question, the answer had still not been seen 93s later,
-with the form untouched. So the tool result says so rather than inviting a reply that would go
-nowhere.
+Control, or the terminal. Two measurements say why:
+
+- An ordinary message queues *behind* the form. On a session parked on a question, it had still
+  not been seen 93s later, with the form untouched.
+- A message sent with `interrupt: true` jumps the queue and does dismiss the prompt — but the
+  session records it as **declined**, not answered, and says as much: a relayed claim is not the
+  user's decision. That is a deliberate property of the CLI, not a gap to work around.
+
+So `interrupt` is for dropping a question the user does not want to answer, letting the session
+move on with a new instruction. It is not a way to answer one.
 
 ### Voice endpoints (Siri Shortcuts)
 
