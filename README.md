@@ -242,6 +242,18 @@ including requests that end in a full stop rather than a question mark. Assistan
 list the tools the session used, which is the progress signal during a long
 task.
 
+### When the session asks a question
+
+A session can stop and put a form up — `AskUserQuestion` — and it then sits idle-looking while it
+waits. Results carry the question and its options verbatim, so a relayed client can read them out
+instead of reporting that nothing is happening.
+
+The answer, though, has to be given **in the session itself** — the Claude app over Remote
+Control, or the terminal. A message sent through this server is accepted but queues behind the
+form: measured on a session parked on a question, the answer had still not been seen 93s later,
+with the form untouched. So the tool result says so rather than inviting a reply that would go
+nowhere.
+
 ### Voice endpoints (Siri Shortcuts)
 
 If your assistant cannot reach MCP connectors from its voice mode — several

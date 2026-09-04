@@ -238,6 +238,82 @@ export function asksForInput(turns: Turn[]): boolean {
   return lines.some(l => SOLICITATION.test(l))
 }
 
+/** A questionnaire the session put up and is blocked on. */
+export interface PendingQuestion {
+  question: string
+  header?: string
+  multiSelect: boolean
+  options: Array<{ label: string; description?: string }>
+}
+
+/**
+ * The questionnaire a session is currently blocked on, if any.
+ *
+ * AskUserQuestion renders as a form in the session's own UI, which a relayed
+ * client never sees: it only ever saw the tool's name go by. Reading the choices
+ * out of the transcript is what lets the question be read aloud and answered
+ * from a phone. A call with no matching tool_result is one still waiting.
+ */
+export async function readPendingQuestions(sessionId: string): Promise<PendingQuestion[]> {
+  const file = await findTranscript(sessionId)
+  if (!file) return []
+  const raw = await tailBytes(file, 1_000_000)
+
+  let pending: { id: string; questions: PendingQuestion[] } | undefined
+  const answered = new Set<string>()
+
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    let entry: TranscriptEntry
+    try {
+      entry = JSON.parse(line) as TranscriptEntry
+    } catch {
+      continue
+    }
+    const content = entry.message?.content
+    if (!Array.isArray(content)) continue
+
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block?.type === 'tool_use' && block.name === 'AskUserQuestion') {
+        const input = block.input as { questions?: unknown } | undefined
+        const raw = Array.isArray(input?.questions) ? input.questions : []
+        const questions = raw
+          .filter((q): q is Record<string, unknown> => typeof q === 'object' && q !== null)
+          .map(q => ({
+            question: String(q.question ?? '').trim(),
+            header: typeof q.header === 'string' ? q.header : undefined,
+            multiSelect: q.multiSelect === true,
+            options: (Array.isArray(q.options) ? q.options : [])
+              .filter((o): o is Record<string, unknown> => typeof o === 'object' && o !== null)
+              .map(o => ({
+                label: String(o.label ?? '').trim(),
+                description: typeof o.description === 'string' ? o.description : undefined,
+              }))
+              .filter(o => o.label),
+          }))
+          .filter(q => q.question)
+        if (questions.length > 0 && typeof block.id === 'string') pending = { id: block.id, questions }
+      } else if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        answered.add(block.tool_use_id)
+      }
+    }
+  }
+
+  if (!pending || answered.has(pending.id)) return []
+  return pending.questions
+}
+
+/** Render a questionnaire so it can be read aloud and answered in words. */
+export function formatQuestions(questions: PendingQuestion[]): string {
+  return questions
+    .map(q => {
+      const options = q.options.map((o, i) => `  ${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`)
+      const note = q.multiSelect ? ' (several answers allowed)' : ''
+      return `${q.header ? `[${q.header}] ` : ''}${q.question}${note}\n${options.join('\n')}`
+    })
+    .join('\n\n')
+}
+
 /** Render turns as readable text for a tool result. */
 export function formatTurns(turns: Turn[]): string {
   if (turns.length === 0) return '(no new output)'

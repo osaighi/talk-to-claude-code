@@ -3,7 +3,16 @@ import { z } from 'zod'
 import { ReceiptListener, renameSession, sendUserMessage } from './peer.js'
 import { assertWritable, isReadOnly } from './policy.js'
 import { listSessions, resolveSession, type LiveSession } from './registry.js'
-import { asksForInput, findDeliveredAt, formatTurns, readTurns, type Turn } from './transcript.js'
+import {
+  asksForInput,
+  findDeliveredAt,
+  formatQuestions,
+  formatTurns,
+  readPendingQuestions,
+  readTurns,
+  type PendingQuestion,
+  type Turn,
+} from './transcript.js'
 import { brief, logCall } from './log.js'
 
 /** Shared across every MCP session this process serves. */
@@ -250,6 +259,8 @@ interface Progress {
   elapsedSeconds: number
   /** The session stopped to ask the user something and expects an answer back. */
   awaitingAnswer: boolean
+  /** The choices it put up, when it stopped on a questionnaire rather than plain text. */
+  questions: PendingQuestion[]
 }
 
 /**
@@ -319,15 +330,21 @@ export async function collectSince(
     }
   }
 
+  // A questionnaire is only up while the session is parked on it; reading it
+  // costs a file tail, so only look when the state says it might be there.
+  const questions = settled() || blocked() ? await readPendingQuestions(session.sessionId) : []
+
   return {
     turns,
     cursor: turns.at(-1)?.timestamp ?? since,
     done: settled(),
     status,
     elapsedSeconds: Number.isFinite(sinceMs) ? Math.max(0, Math.round((Date.now() - sinceMs) / 1000)) : 0,
-    // Only meaningful once it has stopped: mid-task text often reads like a
-    // question the session is about to answer itself.
-    awaitingAnswer: settled() && asksForInput(turns),
+    // A pending questionnaire is definite; falling back to wording only when
+    // there is none, since mid-task text often reads like a question the
+    // session is about to answer itself.
+    awaitingAnswer: questions.length > 0 || (settled() && asksForInput(turns)),
+    questions,
   }
 }
 
@@ -431,11 +448,23 @@ function renderProgress(label: string, progress: Progress): string {
 
   // Blocked beats every other reading: no amount of polling clears it, and
   // telling the client to be patient would strand the user.
-  if (progress.status === 'waiting') {
+  if (progress.status === 'waiting' || progress.questions.length > 0) {
+    // The form itself, not a pointer to it: the user cannot see the session's
+    // screen, and reading the choices out is the whole point of relaying.
+    if (progress.questions.length > 0) {
+      return (
+        `${header}\nSTOP POLLING — the session put a question to the user and cannot continue until it is ` +
+        'answered. Read it out with its options, then tell them plainly that they have to answer it in the ' +
+        'session itself: in the Claude app over Remote Control, or at the terminal. Answering through this ' +
+        'connector does NOT work — the message is accepted but queues behind the form, so it only arrives ' +
+        'after someone has already dismissed it.\n\n' +
+        `${formatQuestions(progress.questions)}`
+      )
+    }
     return (
       `${header}\nSTOP POLLING — the session is waiting on a human decision and cannot continue without it. ` +
-      'Tell the user now: they must answer in the session itself, from Remote Control on their phone or at ' +
-      'the terminal. Reading the last turns with read_transcript will show what it is asking.' +
+      'Tell the user now: it may be a permission prompt, which only they can clear, from Remote Control on ' +
+      'their phone or at the terminal.' +
       (progress.turns.length > 0 ? `\n\n${formatTurns(progress.turns)}` : '')
     )
   }
@@ -450,6 +479,9 @@ function renderProgress(label: string, progress: Progress): string {
   }
   if (progress.done) {
     const closing = progress.awaitingAnswer ? ANSWER_DIRECTIVE(label) : RELAY_FOOTER
+    if (progress.questions.length > 0) {
+      return `${header}\n\n${formatTurns(progress.turns)}\n\n${formatQuestions(progress.questions)}${closing}`
+    }
     return `${header}\n\n${formatTurns(progress.turns)}${closing}`
   }
   // Front-load one speakable line: a voice client should be able to say where
