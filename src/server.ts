@@ -156,14 +156,17 @@ const HEARTBEAT_MS = 5_000
  * the task itself, and one call returns the finished answer with no polling.
  * Polling is where answers get lost, so this is worth reaching for.
  *
- * Subscribing to progress does not prove the client resets on it. If calls start
- * failing at ~60s, set CLAUDE_REMOTE_MCP_LONG_WAIT=0 to fall back.
+ * Off by default, because holding the call is the wrong trade for a voice user:
+ * the client speaks tool *results*, and says nothing at all while one is in
+ * flight. A held call buys a single answer at the cost of minutes of silence,
+ * so short calls that return something sayable win. Set
+ * CLAUDE_REMOTE_MCP_LONG_WAIT=240 for a client that renders progress instead.
  */
 function longWaitSeconds(): number {
   const raw = process.env.CLAUDE_REMOTE_MCP_LONG_WAIT
-  if (raw === undefined) return 240
+  if (raw === undefined) return 0
   const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 240
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
 /** The ceiling for this call: long only if the client is listening for progress. */
@@ -219,15 +222,9 @@ const VERBATIM =
  * and it says explicitly not to close the turn, because that is the behaviour
  * that strands the user.
  */
-const CONTINUE_DIRECTIVE = (cursor: string, now?: string) =>
-  'INCOMPLETE — this is not the answer. The session is still working.\n' +
-  'REQUIRED, in this order:\n' +
-  `  1. Tell the user out loud where things stand, in one short sentence${now ? `: "${now}"` : ''}. ` +
-  'The user is often driving and hears nothing while you stay silent, so never chain these calls quietly.\n' +
-  `  2. Then call get_reply again with since="${cursor}".\n` +
-  'Repeat until state=finished. Never re-send the original prompt — it is already queued and would run twice.\n' +
-  'If you do stop polling, say so plainly: report what you last saw as what you last saw, not as the outcome. ' +
-  'The session keeps working after you stop looking, and it often finishes seconds later.'
+const CONTINUE_DIRECTIVE = (cursor: string) =>
+  `NOT DONE. Say the SPEAK line above, then call get_reply since="${cursor}". Repeat until state=finished. ` +
+  'Never re-send the prompt. If you stop, tell the user you stopped watching.'
 
 /**
  * Replaces the relay footer when the session stopped to ask something.
@@ -472,10 +469,10 @@ function renderProgress(label: string, progress: Progress): string {
   if (progress.turns.length === 0) {
     return progress.done
       ? `${header}\nFinished, with no new output since that cursor.`
-      : `${header}\nThe session has been working ${progress.elapsedSeconds}s and has not emitted a visible ` +
-        'step yet. That is normal — it often reads and thinks for a minute before its first output, and a ' +
-        'substantial task runs for five to ten minutes in total. Silence here is not a failure.\n' +
-        `${CONTINUE_DIRECTIVE(progress.cursor)}${blocked}`
+      : `${header}\nSPEAK: ${label} is still on it, ${progress.elapsedSeconds}s in, nothing to report yet.` +
+        `${blocked}\n${CONTINUE_DIRECTIVE(progress.cursor)}\n` +
+        '(No visible step yet is normal: a session reads and thinks for a minute before its first output, ' +
+        'and a real task runs five to ten minutes.)'
   }
   if (progress.done) {
     const closing = progress.awaitingAnswer ? ANSWER_DIRECTIVE(label) : RELAY_FOOTER
@@ -486,10 +483,12 @@ function renderProgress(label: string, progress: Progress): string {
   }
   // Front-load one speakable line: a voice client should be able to say where
   // things stand without reading the transcript aloud.
+  // The client reads the result aloud, so the first line is written to be
+  // spoken and everything meant for the client is kept below it and terse.
   const now = speak(progress.turns[progress.turns.length - 1]!)
   return (
-    `${header}\nNow: ${now} (${progress.turns.length} step(s) so far)${blocked}\n\n` +
-    `${formatTurns(progress.turns)}\n\n${CONTINUE_DIRECTIVE(progress.cursor, now)}`
+    `${header}\nSPEAK: ${label} works on it — ${now}. (${progress.elapsedSeconds}s)${blocked}\n\n` +
+    `${CONTINUE_DIRECTIVE(progress.cursor)}\n\n${formatTurns(progress.turns)}`
   )
 }
 
@@ -519,9 +518,10 @@ export function createServer(): McpServer {
         'must call get_reply again with the cursor. Sending the prompt again instead will run the work twice ' +
         'and still not produce an answer.\n\n' +
         'Keep it brief out loud. This is often driven by voice, so do not read identifiers, paths or version numbers aloud unless asked — names are enough. Tools take a detailed flag when the user wants more.\n\n' +
-        'Speak between polls. The user may be driving and hears nothing while you chain tool calls silently, ' +
-        'so each time get_reply returns state=working, say in one short sentence what the session is doing ' +
-        'before calling it again. A minute of silence reads as a breakdown, even when work is progressing.\n\n' +
+        'Every result starts with a SPEAK line. Say that line to the user, out loud, as it is — it is written ' +
+        'to be spoken and kept to one sentence. Everything below it is for you, not for them: never read the ' +
+        'directives, cursors or transcripts aloud. Then poll again. One short spoken line every 30s or so is ' +
+        'the target; silence for a minute reads as a breakdown even while work progresses.\n\n' +
         'Be patient. These sessions edit code and run builds: five to ten minutes for one request is ordinary, ' +
         'and the first minute often produces no visible step at all. Several polls returning no new output do ' +
         'NOT mean it has stalled — the elapsed counter in each result shows it is still running. Give up only ' +
@@ -770,7 +770,7 @@ export function createServer(): McpServer {
         const progress = await collectSince(
           target,
           from,
-          budgetFor(extra as HandlerExtra, wait_seconds ?? 25, MIN_WAIT_SECONDS) * 1000,
+          budgetFor(extra as HandlerExtra, wait_seconds ?? NARRATION_WAIT_SECONDS, MIN_WAIT_SECONDS) * 1000,
           progressReporter(extra as HandlerExtra, server),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
