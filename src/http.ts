@@ -170,12 +170,26 @@ export async function serveHttp(options: HttpOptions): Promise<http.Server> {
         await existing.handleRequest(req, res, req.method === 'POST' ? await readBody(req) : undefined)
         return
       }
+
+      // A session id we no longer hold — the server restarted, or a dropped
+      // connection expired the session. Answer 404, the spec's "reinitialise"
+      // signal, so the client opens a fresh session instead of seeing a hard
+      // error and giving up. Treating this stale id as a new initialize (the
+      // old behaviour) made the SDK reject it and surfaced as a lost connection.
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        send(res, 404, {
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session expired — reinitialize.' },
+          id: null,
+        })
+        return
+      }
       if (req.method !== 'POST') {
-        send(res, 400, { error: 'missing or unknown mcp-session-id' })
+        send(res, 400, { error: 'missing mcp-session-id' })
         return
       }
 
-      // A POST with no known session is an initialize; give it its own server.
+      // A POST with no session id at all is an initialize; give it its own server.
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: id => {
