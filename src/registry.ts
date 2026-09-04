@@ -136,6 +136,29 @@ export async function listSessions(): Promise<LiveSession[]> {
  * single live session. Names are matched case-insensitively and a session UUID
  * may be abbreviated as long as the prefix is unambiguous.
  */
+/** Reduce a name to its letters and digits, so spelling noise stops mattering. */
+function normalise(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/** Levenshtein distance, capped — only used to forgive a few characters. */
+function distance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 3) return 99
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(
+        prev[j]! + 1,
+        row[j - 1]! + 1,
+        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      )
+    }
+    prev = row
+  }
+  return prev[b.length]!
+}
+
 export async function resolveSession(ref: string): Promise<LiveSession> {
   const sessions = await listSessions()
   if (sessions.length === 0) throw new Error('No live Claude Code sessions found.')
@@ -153,6 +176,20 @@ export async function resolveSession(ref: string): Promise<LiveSession> {
 
   if (matches.length === 1) return matches[0]!
   if (matches.length === 0) {
+    // Names arrive through speech recognition and come back misspelt —
+    // "TachLyo" for "Tachyo". Ignore punctuation and case first, then forgive
+    // up to two characters, but only when a single session is close enough to
+    // be unambiguous.
+    const target = normalise(needle)
+    if (target.length >= 3) {
+      const scored = sessions
+        .flatMap(s => [s.title, s.name].filter((v): v is string => typeof v === 'string').map(v => ({ s, v: normalise(v) })))
+        .map(({ s, v }) => ({ s, d: v === target ? 0 : v.startsWith(target) || target.startsWith(v) ? 1 : distance(v, target) }))
+        .filter(({ d }) => d <= 2)
+        .sort((a, b) => a.d - b.d)
+      const best = scored[0]
+      if (best && !scored.some(o => o.s.sessionId !== best.s.sessionId && o.d === best.d)) return best.s
+    }
     const known = sessions.map(s => s.label).join(', ')
     throw new Error(`No live session matches '${ref}'. Live sessions: ${known}`)
   }

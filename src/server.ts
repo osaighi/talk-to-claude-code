@@ -738,11 +738,18 @@ export function createServer(): McpServer {
       try {
         const target = await resolveSession(session)
         const label = target.label
-        let from = since ?? new Date().toISOString()
+
+        // Cursors come back through the client and come back mangled — one
+        // arrived as "20: minute:39.795Z". An unparseable cursor would be
+        // compared as a plain string against timestamps, silently selecting the
+        // wrong turns, so it is discarded rather than trusted.
+        const usable = since !== undefined && !Number.isNaN(Date.parse(since))
+        let from = usable ? since! : new Date().toISOString()
 
         // If the last prompt was still queued, everything before the session
         // picked it up belongs to the previous request. Re-check delivery here
         // and move the cursor forward rather than reporting the wrong answer.
+        const pollBudgetMs = budgetFor(extra as HandlerExtra, wait_seconds ?? NARRATION_WAIT_SECONDS, MIN_WAIT_SECONDS) * 1000
         const pending = pendingDelivery.get(target.sessionId)
         if (pending) {
           const at = await findDeliveredAt(target.sessionId, pending.text)
@@ -753,11 +760,30 @@ export function createServer(): McpServer {
             const status = (await refresh(target)).status ?? 'unknown'
             if (status !== 'idle') {
               const waited = Math.max(0, Math.round((Date.now() - Date.parse(pending.sentAt)) / 1000))
+
+              // Blocked on a form, with our message stuck behind it: this never
+              // clears on its own, and saying "still queued" invites a poll
+              // loop that spins until someone gives up.
+              const questions = await readPendingQuestions(target.sessionId)
+              if (status === 'waiting' || questions.length > 0) {
+                logCall('get_reply.result', { session: label, state: 'blocked', waited })
+                return text(
+                  `[session=${label} state=blocked status=${status} elapsed=${waited}s cursor="${from}"]\n` +
+                    `SPEAK: ${label} is stuck on a question and cannot take your message until it is answered ` +
+                    'in the Claude app or at the terminal.\n' +
+                    'STOP POLLING until the user says they have answered. Read the question below out loud.' +
+                    (questions.length > 0 ? `\n\n${formatQuestions(questions)}` : ''),
+                )
+              }
+
+              // Otherwise it is genuinely working through earlier work. Hold for
+              // the poll budget instead of returning at once, or the client
+              // hammers this branch several times a second.
+              await sleep(Math.min(pollBudgetMs, 30_000))
               logCall('get_reply.result', { session: label, state: 'queued', waited })
               return text(
                 `[session=${label} state=queued status=${status} elapsed=${waited}s cursor="${from}"]\n` +
-                  'Your prompt is delivered but still waiting its turn — the session is finishing earlier ' +
-                  'work, and anything it produces right now answers that, not you.\n' +
+                  `SPEAK: ${label} is finishing something else first; your request is next in line.\n` +
                   `${CONTINUE_DIRECTIVE(from)}`,
               )
             }
@@ -767,14 +793,19 @@ export function createServer(): McpServer {
           }
         }
 
+        const damaged =
+          since !== undefined && !usable
+            ? `\n(The cursor "${brief(since, 40)}" was unreadable and has been ignored — reading from now on. ` +
+              'Use the cursor exactly as returned.)'
+            : ''
         const progress = await collectSince(
           target,
           from,
-          budgetFor(extra as HandlerExtra, wait_seconds ?? NARRATION_WAIT_SECONDS, MIN_WAIT_SECONDS) * 1000,
+          pollBudgetMs,
           progressReporter(extra as HandlerExtra, server),
         )
         logCall('get_reply.result', { session: label, state: progress.done ? 'finished' : 'working', turns: progress.turns.length })
-        return text(renderProgress(label, progress))
+        return text(renderProgress(label, progress) + damaged)
       } catch (err) {
         return failure(err)
       }
