@@ -221,9 +221,13 @@ export function speak(turn: Turn): string {
  */
 const PLAIN_QUESTIONS_NOTE =
   '\n\n— relay note (not from the user) —\n' +
-  'The user is driving and answering by voice through a connector. If you need to ask them anything, ask ' +
-  'in plain sentences, not with AskUserQuestion: they cannot fill a form from where they are, and a relayed ' +
-  'answer to one is rejected. A plain-text question they can just answer in words.'
+  'The user is driving and reachable only by voice through a relay. Do NOT use AskUserQuestion, and never ' +
+  'hold a pending question: a message they relay to answer a question you are waiting on is rejected as ' +
+  'coming from a peer. So do not wait — but do not decide for them either. When you need their input, end ' +
+  'your turn by presenting the question and its options as plain-text OUTPUT, the way you would present a ' +
+  'result or a summary, and stop there. It is not a form and not a blocking prompt — it is just the state ' +
+  'of things, laid out for them to hear. Their spoken reply then arrives as an ordinary message; treat it ' +
+  'as the instruction for which direction to take, and act on it.'
 
 const VERBATIM =
   "The prompt to deliver, copied word for word from what the user wrote, in their original language. " +

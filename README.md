@@ -263,12 +263,14 @@ message count as the user. The only inputs that authenticate *as the user* are t
 terminal and Remote Control (the phone). Answering a question is therefore done there; the
 connector cannot, by construction.
 
-`plain_questions` (default on) reduces how often this bites: it asks the session to put follow-up
-questions in plain text instead of an `AskUserQuestion` form. The session then stays idle and
-conversational rather than hard-blocking, so a relayed instruction can redirect it — but it still
-cannot *answer* a pending question. Combine it with autonomy guidance ("decide the details
-yourself, only ask on the big calls") to make questions rare. `interrupt` drops a question the
-user would rather not answer at all.
+`plain_questions` (default on) is what makes questions answerable by voice at all. It asks the
+session, via a fenced relay note, to never use `AskUserQuestion` and never hold a *pending*
+question — instead to present the question and its options as plain-text **output**, the way it
+would present a result, and end its turn. Because there is no pending prompt, the user's spoken
+reply arrives as an ordinary instruction and the session acts on it — verified end to end: a
+session laid out two options, the relayed "take the second one" was accepted and executed, with
+no peer-refusal. It does not decide for the user, and it does not block. `interrupt` still drops
+a question outright when the user would rather not engage with it.
 
 ### Voice endpoints (Siri Shortcuts)
 
