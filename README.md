@@ -204,6 +204,7 @@ HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 | `send_message` | Queue a prompt, return a cursor immediately |
 | `get_reply` | Poll for output since a cursor; says whether the session finished |
 | `ask` | Send and wait in one call, for short questions |
+| `set_delay` | Set the poll wait ceiling (5–55s) for later calls |
 | `rename_session` | Change a session's display name |
 
 Sessions are addressed by the name you gave them, the registry name, the session id (or a unique
@@ -271,6 +272,23 @@ reply arrives as an ordinary instruction and the session acts on it — verified
 session laid out two options, the relayed "take the second one" was accepted and executed, with
 no peer-refusal. It does not decide for the user, and it does not block. `interrupt` still drops
 a question outright when the user would rather not engage with it.
+
+### Pacing and confirmation
+
+Three controls shape how a driven session reports back and starts work:
+
+- **`set_delay`** sets how long `get_reply`/`ask` wait before returning (5–55s, a
+  ceiling — a call still returns as soon as the session settles). Longer = fewer,
+  fuller updates; shorter = more frequent check-ins.
+- **Continue or stop.** While a session is still working, `get_reply` reports the
+  one-line progress and asks the user whether to keep watching or stop — the loop
+  is paced by the user, not run silently. Stopping ends the watching only; the
+  session keeps working.
+- **Confirm before acting** (`confirm`, default on). Before starting a new
+  request, the session restates it in its own words, lays out its plan as output,
+  and ends its turn without doing anything. The user's next message — "go", or
+  changes — is an ordinary instruction it then carries out. Set `confirm:false`
+  for a request that should run immediately (and on the "go" reply itself).
 
 ### Voice endpoints (Siri Shortcuts)
 

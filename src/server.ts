@@ -110,6 +110,17 @@ const STARTUP_GRACE_MS = 12_000
  * the whole prompt. So every call here stays comfortably under that ceiling and
  * hands back a cursor instead of waiting.
  */
+/**
+ * Mutable settings, shared across every MCP session in this process (so they
+ * survive a client reconnect). Changed at runtime via tools.
+ */
+const runtime = {
+  /** Ceiling a poll waits before returning; falls back to NARRATION_WAIT_SECONDS. */
+  delaySeconds: undefined as number | undefined,
+  /** Make the session restate the plan and wait for the user's go-ahead before acting. */
+  confirmPlan: true,
+}
+
 const MAX_WAIT_SECONDS = 45
 
 /**
@@ -219,6 +230,23 @@ export function speak(turn: Turn): string {
  * is appended below the user's message, fenced and attributed, so their words
  * stay verbatim above it.
  */
+/**
+ * Appended when confirm-plan is on: the session must echo the request back and
+ * lay out its plan before doing anything, and wait for the user's approval.
+ *
+ * Uses the same present-as-output trick as questions: the plan is stated as
+ * output and the turn ends — no pending prompt — so the user's "go" (or their
+ * changes) arrives as an ordinary instruction the session then acts on.
+ */
+const CONFIRM_PLAN_NOTE =
+  '\n\n— relay note (not from the user) —\n' +
+  'If the message above is a NEW request: do not start it yet. Restate it in your own words so the user ' +
+  'knows you understood, lay out your plan as plain-text output, and END YOUR TURN. Do not wait for ' +
+  'approval and do not treat this as a pending decision — just present the plan for the user to hear, the ' +
+  'way you would present a result. If instead the message above is the user telling you to go ahead with ' +
+  '(or adjust) a plan you already presented, then carry it out now. In both cases the user\'s messages are ' +
+  'ordinary instructions to act on, never approvals you must block and wait for.'
+
 const PLAIN_QUESTIONS_NOTE =
   '\n\n— relay note (not from the user) —\n' +
   'The user is driving and reachable only by voice through a relay. Do NOT use AskUserQuestion, and never ' +
@@ -241,8 +269,9 @@ const VERBATIM =
  * that strands the user.
  */
 const CONTINUE_DIRECTIVE = (cursor: string) =>
-  `NOT DONE. Say the SPEAK line above, then call get_reply since="${cursor}". Repeat until state=finished. ` +
-  'Never re-send the prompt. If you stop, tell the user you stopped watching.'
+  `NOT DONE. Tell the user the SPEAK line above, then ASK them: keep watching, or stop? ` +
+  `If they want to keep going, call get_reply again with since="${cursor}". If they say stop, stop calling ` +
+  `— the session keeps working regardless; stopping only ends the watching. Never re-send the prompt.`
 
 /**
  * Replaces the relay footer when the session stopped to ask something.
@@ -669,9 +698,14 @@ export function createServer(): McpServer {
           .optional()
           .describe(
             'Append a short relay note asking the session to ask any follow-up in plain text rather than an ' +
-              'AskUserQuestion form, which cannot be answered remotely (default true). The note is fenced and ' +
-              "marked as coming from the relay, so the user's own words stay verbatim. Set false to send the " +
-              'message with nothing added.',
+              'AskUserQuestion form, which cannot be answered remotely (default true).',
+          ),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe(
+            'Ask the session to restate the request and its plan and wait for the user to approve before ' +
+              'doing anything (default true). Set false for a request that should run immediately.',
           ),
         interrupt: z
           .boolean()
@@ -684,7 +718,7 @@ export function createServer(): McpServer {
           ),
       },
     },
-    async ({ session, message, plain_questions, interrupt }) => {
+    async ({ session, message, plain_questions, confirm, interrupt }) => {
       describeClientOnce(server)
       logCall('send_message', { session, message: brief(message), plainQ: plain_questions !== false })
       try {
@@ -710,7 +744,11 @@ export function createServer(): McpServer {
         }
 
         const sentAt = new Date().toISOString()
-        const delivered = plain_questions === false ? message : message + PLAIN_QUESTIONS_NOTE
+        const doConfirm = confirm !== false && runtime.confirmPlan
+        const delivered =
+          message +
+          (plain_questions === false ? '' : PLAIN_QUESTIONS_NOTE) +
+          (doConfirm ? CONFIRM_PLAN_NOTE : '')
         const result = await sendUserMessage(target, delivered, {
           receipts,
           receiptTimeoutMs: 3000,
@@ -791,7 +829,7 @@ export function createServer(): McpServer {
         // If the last prompt was still queued, everything before the session
         // picked it up belongs to the previous request. Re-check delivery here
         // and move the cursor forward rather than reporting the wrong answer.
-        const pollBudgetMs = budgetFor(extra as HandlerExtra, wait_seconds ?? NARRATION_WAIT_SECONDS, MIN_WAIT_SECONDS) * 1000
+        const pollBudgetMs = budgetFor(extra as HandlerExtra, wait_seconds ?? runtime.delaySeconds ?? NARRATION_WAIT_SECONDS, MIN_WAIT_SECONDS) * 1000
         const pending = pendingDelivery.get(target.sessionId)
         if (pending) {
           const at = await findDeliveredAt(target.sessionId, pending.text)
@@ -874,8 +912,14 @@ export function createServer(): McpServer {
           .optional()
           .describe(
             'Append a relay note asking the session to ask any follow-up in plain text rather than an ' +
-              'AskUserQuestion form, which cannot be answered remotely (default true). Fenced and attributed, ' +
-              "so the user's words stay verbatim.",
+              'AskUserQuestion form (default true).',
+          ),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe(
+            'Ask the session to restate the request and its plan and wait for approval before acting ' +
+              '(default true). Set false to run immediately.',
           ),
         timeout_seconds: z
           .number()
@@ -891,7 +935,7 @@ export function createServer(): McpServer {
           ),
       },
     },
-    async ({ session, message, plain_questions, timeout_seconds }, extra) => {
+    async ({ session, message, plain_questions, confirm, timeout_seconds }, extra) => {
       describeClientOnce(server)
       logCall('ask', { session, message: brief(message), timeout_seconds, progress: wantsProgress(extra as HandlerExtra) })
       try {
@@ -899,7 +943,11 @@ export function createServer(): McpServer {
         assertWritable(target)
 
         const sentAt = new Date().toISOString()
-        const delivered = plain_questions === false ? message : message + PLAIN_QUESTIONS_NOTE
+        const doConfirm = confirm !== false && runtime.confirmPlan
+        const delivered =
+          message +
+          (plain_questions === false ? '' : PLAIN_QUESTIONS_NOTE) +
+          (doConfirm ? CONFIRM_PLAN_NOTE : '')
         const result = await sendUserMessage(target, delivered, { receipts, receiptTimeoutMs: 3000 })
         const label = target.label
 
@@ -922,6 +970,26 @@ export function createServer(): McpServer {
       } catch (err) {
         return failure(err)
       }
+    },
+  )
+
+  server.registerTool(
+    'set_delay',
+    {
+      title: 'Set the gateway wait',
+      description:
+        'Set how long get_reply and ask wait for the session before returning, in seconds (5–55). This is a ' +
+        'ceiling, not a fixed delay — a call still returns as soon as the session settles. Longer means ' +
+        'fewer, richer updates; shorter means more frequent check-ins. Applies to later calls until changed, ' +
+        'and stays under the 60s limit clients abort at.',
+      inputSchema: {
+        seconds: z.number().int().min(5).max(55).describe('Wait ceiling in seconds, 5 to 55.'),
+      },
+    },
+    async ({ seconds }) => {
+      runtime.delaySeconds = seconds
+      logCall('set_delay', { seconds })
+      return text(`Gateway wait set to ${seconds}s (a ceiling — a call returns sooner once the session settles).`)
     },
   )
 
