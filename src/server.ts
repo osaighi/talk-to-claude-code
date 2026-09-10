@@ -143,7 +143,7 @@ const ONBOARDING =
   'message more than the one session the user is actually working on. Just ask the user, call ' +
   'set_preferences, and wait for their first real request.'
 
-const MAX_WAIT_SECONDS = 45
+const MAX_WAIT_SECONDS = 50
 
 /**
  * get_reply is capped tighter than the client deadline allows, so each return is
@@ -165,7 +165,7 @@ const NARRATION_WAIT_SECONDS = 30
  * nothing to wait for: the wait is a ceiling, and an idle session settles and
  * returns in about a second regardless.
  */
-const MIN_WAIT_SECONDS = 20
+const MIN_WAIT_SECONDS = 5
 
 /**
  * ask blocks longer than get_reply, and ignores a client asking for less.
@@ -297,16 +297,22 @@ const VERBATIM =
 const CONTINUE_DIRECTIVE = (cursor: string) => {
   if (!runtime.periodicUpdates) {
     return (
-      `NOT DONE. Tell the user the SPEAK line above, then stop — they did not ask for automatic updates. ` +
+      `NOT DONE. Tell the user the SPEAK line above, then stop — they did not ask for updates. ` +
       `Only check again if they ask, by calling get_reply with since="${cursor}". Never re-send the prompt.`
     )
   }
   const every = runtime.delaySeconds ?? NARRATION_WAIT_SECONDS
+  // One poll per turn: report where it's at, then ASK the user whether to keep
+  // waiting, and END THE TURN so they can answer. Do NOT loop on your own —
+  // that is the auto-loop the client acknowledges but never actually holds. The
+  // next get_reply blocks ~every seconds server-side and returns the next
+  // update, so the user gets a check-in each interval, on their say-so.
   return (
-    `NOT DONE. Tell the user the SPEAK line above, then IMMEDIATELY call get_reply again with ` +
-    `since="${cursor}". Keep doing this on your own — one short update about every ${every}s — and do NOT ` +
-    `end your turn, until state=finished. The user can say stop at any time; then stop (the session keeps ` +
-    `working regardless). Never re-send the prompt, and never wait to be told to continue.`
+    `NOT DONE. Tell the user, in one short sentence, where it's at (the SPEAK line above), then ASK them: ` +
+    `keep waiting, or stop? END YOUR TURN there so they can answer — do NOT poll again on your own. ` +
+    `If they say keep waiting, call get_reply once more with since="${cursor}"; it waits about ${every}s and ` +
+    `returns the next update, then you report and ask again. If they say stop, stop (the session keeps ` +
+    `working regardless). Never re-send the prompt.`
   )
 }
 
@@ -1038,9 +1044,9 @@ export function createServer(): McpServer {
           .number()
           .int()
           .min(5)
-          .max(55)
+          .max(50)
           .optional()
-          .describe('How often to update, in seconds (5–55), when periodic_updates is on. A ceiling.'),
+          .describe('How often to update, in seconds (5–50), when periodic_updates is on. It waits this long.'),
         confirm_before_action: z
           .boolean()
           .optional()
@@ -1072,7 +1078,7 @@ export function createServer(): McpServer {
         'Shortcut for the update interval alone (5–55s), a ceiling — a call returns sooner once the session ' +
         'settles. Equivalent to set_preferences with interval_seconds.',
       inputSchema: {
-        seconds: z.number().int().min(5).max(55).describe('Interval ceiling in seconds, 5 to 55.'),
+        seconds: z.number().int().min(5).max(50).describe('Interval in seconds, 5 to 50 (it waits this long).'),
       },
     },
     async ({ seconds }) => {
