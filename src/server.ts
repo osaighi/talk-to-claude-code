@@ -138,7 +138,10 @@ const ONBOARDING =
   '  2. If yes, how often — 30s, 1 minute, …?\n' +
   '  3. Do you want to confirm before each action? (Claude would restate what it understood and lay out ' +
   'its plan for you to approve before starting.)\n' +
-  'Do this before send_message/ask. Once set_preferences is called it will not be asked again.'
+  'These preferences are applied automatically by this relay on every request — you do NOT configure or ' +
+  'prime the sessions yourself. Never send a session a setup or "prepare yourself" message, and never ' +
+  'message more than the one session the user is actually working on. Just ask the user, call ' +
+  'set_preferences, and wait for their first real request.'
 
 const MAX_WAIT_SECONDS = 45
 
@@ -733,7 +736,9 @@ export function createServer(): McpServer {
         'Queue a prompt in a running session and return immediately with a cursor. The message enters that ' +
         'session as if typed, so it is also visible to any Remote Control client watching it. ' +
         'Follow up with get_reply, passing the cursor as `since`, to watch the session work. ' +
-        'Prefer this over ask for anything long-running.',
+        'Prefer this over ask for anything long-running. Send only the user\'s actual request, to the one ' +
+        'session they are working on — never a setup or "prepare yourself" message, and never a broadcast to ' +
+        'several sessions. Confirm-before-action is applied automatically; you do not need to arrange it.',
       inputSchema: {
         session: z.string().describe('Session name, session id (or unique prefix), or pid.'),
         message: z.string().min(1).describe(VERBATIM),
