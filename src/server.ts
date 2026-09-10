@@ -117,6 +117,8 @@ const STARTUP_GRACE_MS = 12_000
 const runtime = {
   /** Ceiling a poll waits before returning; falls back to NARRATION_WAIT_SECONDS. */
   delaySeconds: undefined as number | undefined,
+  /** Whether get_reply should keep polling and reporting on its own while a session works. */
+  periodicUpdates: true,
   /** Make the session restate the plan and wait for the user's go-ahead before acting. */
   confirmPlan: true,
 }
@@ -268,10 +270,25 @@ const VERBATIM =
  * and it says explicitly not to close the turn, because that is the behaviour
  * that strands the user.
  */
-const CONTINUE_DIRECTIVE = (cursor: string) =>
-  `NOT DONE. Tell the user the SPEAK line above, then ASK them: keep watching, or stop? ` +
-  `If they want to keep going, call get_reply again with since="${cursor}". If they say stop, stop calling ` +
-  `— the session keeps working regardless; stopping only ends the watching. Never re-send the prompt.`
+// The session is still working: keep polling on a fixed cadence and report each
+// update on your own, without asking the user to continue each time. This is
+// what "check in every X seconds" means — the interval is the poll wait, set
+// with set_delay. Ending the turn after one poll is the failure to avoid.
+const CONTINUE_DIRECTIVE = (cursor: string) => {
+  if (!runtime.periodicUpdates) {
+    return (
+      `NOT DONE. Tell the user the SPEAK line above, then stop — they did not ask for automatic updates. ` +
+      `Only check again if they ask, by calling get_reply with since="${cursor}". Never re-send the prompt.`
+    )
+  }
+  const every = runtime.delaySeconds ?? NARRATION_WAIT_SECONDS
+  return (
+    `NOT DONE. Tell the user the SPEAK line above, then IMMEDIATELY call get_reply again with ` +
+    `since="${cursor}". Keep doing this on your own — one short update about every ${every}s — and do NOT ` +
+    `end your turn, until state=finished. The user can say stop at any time; then stop (the session keeps ` +
+    `working regardless). Never re-send the prompt, and never wait to be told to continue.`
+  )
+}
 
 /**
  * Replaces the relay footer when the session stopped to ask something.
@@ -553,6 +570,14 @@ export function createServer(): McpServer {
         'Drives Claude Code CLI sessions running on this machine through their cross-session messaging socket. ' +
         'Messages land in the target session\'s prompt queue, so a Remote Control client (phone, claude.ai) ' +
         'watching that session stays in sync and can keep driving it at the same time.\n\n' +
+        'Onboarding — do this the first time the user starts working with a session in a conversation, ' +
+        'before sending any work. Ask them, out loud, three short questions and then call set_preferences ' +
+        'with their answers:\n' +
+        '  1. Do you want me to update you periodically while Claude works?\n' +
+        '  2. If yes, how often — 30s, 1 minute, …? (map to interval_seconds)\n' +
+        '  3. Do you want to confirm before each action? If yes, Claude will restate what it understood and ' +
+        'lay out its plan for you to approve before starting (a result to hear, not a form). \n' +
+        'Do not re-ask on later requests in the same conversation; the preferences stick.\n\n' +
         'Workflow: call list_sessions first — it names the sessions you can drive. For a quick ' +
         'question use ask. For real work use send_message, which returns a cursor, then call get_reply in a ' +
         'loop with that cursor until it reports finished. Sessions take minutes on substantial tasks, so ' +
@@ -806,9 +831,8 @@ export function createServer(): McpServer {
           .max(NARRATION_WAIT_SECONDS)
           .optional()
           .describe(
-            'How long to wait for activity before returning (default 25). Values below 20 are raised to 20: ' +
-              'short waits mean more polls for the same task, and every extra poll is another chance to lose ' +
-              'the thread. It returns as soon as the session settles, so a longer wait costs nothing.',
+            'How long to wait before returning (default from set_delay, else 25; floor 20). A ceiling — ' +
+              'returns as soon as the session settles.',
           ),
       },
     },
@@ -974,22 +998,62 @@ export function createServer(): McpServer {
   )
 
   server.registerTool(
+    'set_preferences',
+    {
+      title: 'Set watching preferences',
+      description:
+        'Record how the user wants to be kept in the loop while a session works. Ask these at the start of ' +
+        'working with a session (see the onboarding note in the instructions) and call this with their ' +
+        'answers. All fields optional; unset ones are left unchanged. Applies to later calls until changed.',
+      inputSchema: {
+        periodic_updates: z
+          .boolean()
+          .optional()
+          .describe('Whether to keep giving the user updates on your own while a session works.'),
+        interval_seconds: z
+          .number()
+          .int()
+          .min(5)
+          .max(55)
+          .optional()
+          .describe('How often to update, in seconds (5–55), when periodic_updates is on. A ceiling.'),
+        confirm_before_action: z
+          .boolean()
+          .optional()
+          .describe(
+            'Whether, before a new request, the session must restate what it understood and lay out its ' +
+              'plan as output (a result to hear, not a question) and wait for the user to say go.',
+          ),
+      },
+    },
+    async ({ periodic_updates, interval_seconds, confirm_before_action }) => {
+      if (periodic_updates !== undefined) runtime.periodicUpdates = periodic_updates
+      if (interval_seconds !== undefined) runtime.delaySeconds = interval_seconds
+      if (confirm_before_action !== undefined) runtime.confirmPlan = confirm_before_action
+      logCall('set_preferences', { periodic_updates, interval_seconds, confirm_before_action })
+      return text(
+        `Preferences set — periodic updates: ${runtime.periodicUpdates ? 'on' : 'off'}` +
+          `${runtime.periodicUpdates ? ` every ~${runtime.delaySeconds ?? NARRATION_WAIT_SECONDS}s` : ''}; ` +
+          `confirm before each action: ${runtime.confirmPlan ? 'on' : 'off'}.`,
+      )
+    },
+  )
+
+  server.registerTool(
     'set_delay',
     {
-      title: 'Set the gateway wait',
+      title: 'Set the update interval',
       description:
-        'Set how long get_reply and ask wait for the session before returning, in seconds (5–55). This is a ' +
-        'ceiling, not a fixed delay — a call still returns as soon as the session settles. Longer means ' +
-        'fewer, richer updates; shorter means more frequent check-ins. Applies to later calls until changed, ' +
-        'and stays under the 60s limit clients abort at.',
+        'Shortcut for the update interval alone (5–55s), a ceiling — a call returns sooner once the session ' +
+        'settles. Equivalent to set_preferences with interval_seconds.',
       inputSchema: {
-        seconds: z.number().int().min(5).max(55).describe('Wait ceiling in seconds, 5 to 55.'),
+        seconds: z.number().int().min(5).max(55).describe('Interval ceiling in seconds, 5 to 55.'),
       },
     },
     async ({ seconds }) => {
       runtime.delaySeconds = seconds
       logCall('set_delay', { seconds })
-      return text(`Gateway wait set to ${seconds}s (a ceiling — a call returns sooner once the session settles).`)
+      return text(`Update interval set to ~${seconds}s (a ceiling — returns sooner once the session settles).`)
     },
   )
 

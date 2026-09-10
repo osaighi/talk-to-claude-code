@@ -204,7 +204,8 @@ HTTP mode binds `127.0.0.1:8787/mcp` by default and refuses to start without
 | `send_message` | Queue a prompt, return a cursor immediately |
 | `get_reply` | Poll for output since a cursor; says whether the session finished |
 | `ask` | Send and wait in one call, for short questions |
-| `set_delay` | Set the poll wait ceiling (5–55s) for later calls |
+| `set_preferences` | Set periodic updates on/off, interval, and confirm-before-action |
+| `set_delay` | Shortcut for the update interval alone (5–55s) |
 | `rename_session` | Change a session's display name |
 
 Sessions are addressed by the name you gave them, the registry name, the session id (or a unique
@@ -275,20 +276,23 @@ a question outright when the user would rather not engage with it.
 
 ### Pacing and confirmation
 
-Three controls shape how a driven session reports back and starts work:
+How a driven session keeps the user in the loop is set per conversation, ideally
+by asking at the start (the server instructions prompt the client to onboard):
 
-- **`set_delay`** sets how long `get_reply`/`ask` wait before returning (5–55s, a
-  ceiling — a call still returns as soon as the session settles). Longer = fewer,
-  fuller updates; shorter = more frequent check-ins.
-- **Continue or stop.** While a session is still working, `get_reply` reports the
-  one-line progress and asks the user whether to keep watching or stop — the loop
-  is paced by the user, not run silently. Stopping ends the watching only; the
-  session keeps working.
-- **Confirm before acting** (`confirm`, default on). Before starting a new
-  request, the session restates it in its own words, lays out its plan as output,
-  and ends its turn without doing anything. The user's next message — "go", or
-  changes — is an ordinary instruction it then carries out. Set `confirm:false`
-  for a request that should run immediately (and on the "go" reply itself).
+- **Periodic updates.** When on, a still-working `get_reply` tells the client to
+  keep polling on its own and give one short update every interval, until the
+  session finishes — no nudging. When off, it reports once and stops until asked.
+- **Interval.** How often those updates come — `set_delay` (seconds, 5–55) or
+  `set_preferences(interval_seconds:)`. A ceiling: a call returns as soon as the
+  session settles.
+- **Confirm before acting** (`confirm_before_action`, or per-call `confirm`).
+  When on, before a new request the session restates what it understood and lays
+  out its plan as output — a result to hear, not a form — then ends its turn.
+  The user's "go" or changes arrive as an ordinary instruction it then acts on.
+
+`set_preferences({periodic_updates, interval_seconds, confirm_before_action})`
+records all three; they stick for the conversation. The client is asked to
+collect them up front with three short questions.
 
 ### Voice endpoints (Siri Shortcuts)
 
