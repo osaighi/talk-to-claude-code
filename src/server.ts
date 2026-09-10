@@ -121,7 +121,24 @@ const runtime = {
   periodicUpdates: true,
   /** Make the session restate the plan and wait for the user's go-ahead before acting. */
   confirmPlan: true,
+  /** Set once the user has been onboarded, so list_sessions stops prompting for it. */
+  preferencesSet: false,
 }
+
+/**
+ * The onboarding prompt, carried in the list_sessions result until preferences
+ * are set. Server `instructions` are advisory and clients like Grok do not
+ * reliably act on them; a tool *result* is read and acted on, so this is where
+ * the onboarding actually has to live to fire.
+ */
+const ONBOARDING =
+  '\n\nFIRST — before driving any session, the user has not set their watching preferences yet. ' +
+  'Ask them these three short questions out loud, then call set_preferences with their answers:\n' +
+  '  1. Do you want me to update you periodically while Claude works?\n' +
+  '  2. If yes, how often — 30s, 1 minute, …?\n' +
+  '  3. Do you want to confirm before each action? (Claude would restate what it understood and lay out ' +
+  'its plan for you to approve before starting.)\n' +
+  'Do this before send_message/ask. Once set_preferences is called it will not be asked again.'
 
 const MAX_WAIT_SECONDS = 45
 
@@ -635,7 +652,8 @@ export function createServer(): McpServer {
         if (detailed) {
           const shown = include_unreachable ? sessions : reachable
           const body = shown.map(s => `- ${describe(s)}`).join('\n\n')
-          return text(`${shown.length} session(s):\n\n${body}${mode}`)
+          const onboard = runtime.preferencesSet ? '' : ONBOARDING
+          return text(`${shown.length} session(s):\n\n${body}${mode}${onboard}`)
         }
 
         if (reachable.length === 0) {
@@ -656,7 +674,8 @@ export function createServer(): McpServer {
           : blocked.length > 0
             ? ` (${blocked.length} other${blocked.length > 1 ? 's' : ''} can be read but not messaged.)`
             : ''
-        return text(`${reachable.length} session(s) you can drive: ${names}.${rest}${mode}`)
+        const onboard = runtime.preferencesSet ? '' : ONBOARDING
+        return text(`${reachable.length} session(s) you can drive: ${names}.${rest}${mode}${onboard}`)
       } catch (err) {
         return failure(err)
       }
@@ -1030,6 +1049,7 @@ export function createServer(): McpServer {
       if (periodic_updates !== undefined) runtime.periodicUpdates = periodic_updates
       if (interval_seconds !== undefined) runtime.delaySeconds = interval_seconds
       if (confirm_before_action !== undefined) runtime.confirmPlan = confirm_before_action
+      runtime.preferencesSet = true
       logCall('set_preferences', { periodic_updates, interval_seconds, confirm_before_action })
       return text(
         `Preferences set — periodic updates: ${runtime.periodicUpdates ? 'on' : 'off'}` +
