@@ -310,9 +310,10 @@ const CONTINUE_DIRECTIVE = (cursor: string) => {
   return (
     `NOT DONE. Tell the user, in one short sentence, where it's at (the SPEAK line above), then ASK them: ` +
     `keep waiting, or stop? END YOUR TURN there so they can answer — do NOT poll again on your own. ` +
-    `If they say keep waiting, call get_reply once more with since="${cursor}"; it waits about ${every}s and ` +
-    `returns the next update, then you report and ask again. If they say stop, stop (the session keeps ` +
-    `working regardless). Never re-send the prompt.`
+    `Route their reply: if it just means keep waiting ("continue", "oui", "attends", "encore"), call ` +
+    `get_reply again with since="${cursor}" — do NOT send those words to the session. Send to the session ` +
+    `only a genuinely new instruction or an answer to a question it asked. If they say stop, stop (the ` +
+    `session keeps working regardless). It waits about ${every}s each poll. Never re-send the prompt.`
   )
 }
 
@@ -791,9 +792,10 @@ export function createServer(): McpServer {
             logCall('send_message.duplicate', { session: label, waited })
             return text(
               `[session=${label} state=working elapsed=${waited}s cursor="${previous.cursor}"]\n` +
-                'NOT SENT — this exact prompt is already running, delivered ' +
-                `${waited}s ago. Sending it again would run the work twice and shift every later answer ` +
-                `by one.\nCall get_reply with since="${previous.cursor}" instead.`,
+                'ALREADY DELIVERED — do NOT send this again and do NOT retry. It was delivered ' +
+                `${waited}s ago and is running; re-sending runs the work twice. This is not an error to work ` +
+                `around. To see where it is, call get_reply with since="${previous.cursor}". If you meant to ` +
+                `answer the session's question, send the ANSWER, not the same message again.`,
             )
           }
         }
