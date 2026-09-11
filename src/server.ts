@@ -310,10 +310,12 @@ const CONTINUE_DIRECTIVE = (cursor: string) => {
   return (
     `NOT DONE. Tell the user, in one short sentence, where it's at (the SPEAK line above), then ASK them: ` +
     `keep waiting, or stop? END YOUR TURN there so they can answer — do NOT poll again on your own. ` +
-    `Route their reply: if it just means keep waiting ("continue", "oui", "attends", "encore"), call ` +
-    `get_reply again with since="${cursor}" — do NOT send those words to the session. Send to the session ` +
-    `only a genuinely new instruction or an answer to a question it asked. If they say stop, stop (the ` +
-    `session keeps working regardless). It waits about ${every}s each poll. Never re-send the prompt.`
+    `Route their reply: if it just means keep waiting ("continue", "oui", "attends", "encore"), FIRST say a ` +
+    `short spoken acknowledgement out loud ("ok, j'attends" / "ok, on continue") so they are not left in ` +
+    `silence, THEN call get_reply again with since="${cursor}" — it waits about ${every}s before the next ` +
+    `update. Do NOT send those words to the session. Send to the session only a genuinely new instruction ` +
+    `or an answer to a question it asked. If they say stop, stop (the session keeps working regardless). ` +
+    `Never re-send the prompt.`
   )
 }
 
