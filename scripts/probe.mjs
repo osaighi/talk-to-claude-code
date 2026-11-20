@@ -16,7 +16,7 @@ for (const s of sessions) {
   console.log(`    socket=${s.socketPath ?? '(none)'}`)
   console.log(`    remoteControl=${s.bridgeSessionId ?? '(not mirrored)'}`)
   if (s.socketPath) {
-    const hash = createHash('sha256').update(path.resolve(s.socketPath)).digest('hex')
+    const hash = createHash('sha256').update(process.platform === 'win32' ? s.socketPath.toLowerCase() : path.resolve(s.socketPath)).digest('hex')
     const match = keyFiles.find(f => f === `${s.pid}.${hash}.key`)
     console.log(`    keyFile=${match ?? 'NOT FOUND'}  (derived hash ${hash.slice(0, 16)}…)`)
   }
