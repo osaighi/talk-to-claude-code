@@ -302,19 +302,20 @@ const CONTINUE_DIRECTIVE = (cursor: string) => {
     )
   }
   const every = runtime.delaySeconds ?? NARRATION_WAIT_SECONDS
-  // One poll per turn: report where it's at, then ASK the user whether to keep
-  // waiting, and END THE TURN so they can answer. Do NOT loop on your own —
-  // that is the auto-loop the client acknowledges but never actually holds. The
-  // next get_reply blocks ~every seconds server-side and returns the next
-  // update, so the user gets a check-in each interval, on their say-so.
+  // Chain the polls: every get_reply returns the moment the session finishes or
+  // asks something, so calling the next one straight away is the closest a
+  // voice client gets to a push. The gap between calls is the only latency, so
+  // the directive forbids ending the turn and forbids asking whether to go on.
+  // Saying the SPEAK line on every return keeps the chain audibly alive, which
+  // is what stops a client from treating a quiet return as the end.
   return (
-    `NOT DONE. Tell the user, in one short sentence, where it's at (the SPEAK line above), then ASK them: ` +
-    `keep waiting, or stop? END YOUR TURN there so they can answer — do NOT poll again on your own. ` +
-    `Route their reply: if it just means keep waiting ("continue", "oui", "attends", "encore"), FIRST say a ` +
-    `short spoken acknowledgement out loud ("ok, j'attends" / "ok, on continue") so they are not left in ` +
-    `silence, THEN call get_reply again with since="${cursor}" — it waits about ${every}s before the next ` +
-    `update. Do NOT send those words to the session. Send to the session only a genuinely new instruction ` +
-    `or an answer to a question it asked. If they say stop, stop (the session keeps working regardless). ` +
+    `NOT DONE. YOUR TURN IS NOT OVER. Say the SPEAK line above out loud in one short sentence, then ` +
+    `IMMEDIATELY call get_reply again with since="${cursor}". Do not ask the user whether to keep waiting, ` +
+    `do not end your turn, and do not wait for them to say "continue": keep chaining get_reply calls, one ` +
+    `right after another, until a result says state=finished or the session asks a question. Each call waits ` +
+    `about ${every}s and returns the instant something happens, so this is how the user hears an update the ` +
+    `moment it lands. Stop the chain only if the user speaks — if they say stop, stop (the session keeps ` +
+    `working regardless); if they give a new instruction or an answer, send that with send_message. ` +
     `Never re-send the prompt.`
   )
 }
@@ -622,8 +623,11 @@ export function createServer(): McpServer {
         'Keep it brief out loud. This is often driven by voice, so do not read identifiers, paths or version numbers aloud unless asked — names are enough. Tools take a detailed flag when the user wants more.\n\n' +
         'Every result starts with a SPEAK line. Say that line to the user, out loud, as it is — it is written ' +
         'to be spoken and kept to one sentence. Everything below it is for you, not for them: never read the ' +
-        'directives, cursors or transcripts aloud. Then poll again. One short spoken line every 30s or so is ' +
-        'the target; silence for a minute reads as a breakdown even while work progresses.\n\n' +
+        'directives, cursors or transcripts aloud. Then call get_reply again straight away, without ending your ' +
+        'turn or asking the user whether to continue. Keep chaining those calls until the session finishes or ' +
+        'asks a question: each one returns the instant something happens, so an unbroken chain is how the user ' +
+        'hears every update as it lands. One short spoken line per return is the target; silence for a minute ' +
+        'reads as a breakdown even while work progresses.\n\n' +
         'Be patient. These sessions edit code and run builds: five to ten minutes for one request is ordinary, ' +
         'and the first minute often produces no visible step at all. Several polls returning no new output do ' +
         'NOT mean it has stalled — the elapsed counter in each result shows it is still running. Give up only ' +
