@@ -83,6 +83,11 @@ async function isLive(record: SessionRecord): Promise<boolean> {
 
 async function resolveSocket(record: SessionRecord): Promise<string | undefined> {
   const candidate = record.messagingSocketPath ?? defaultSocketPathFor(record.pid)
+  // On Windows the CLI binds a named pipe (\\.\pipe\LOCAL\cc-msg-<hex>). It stats
+  // fine but is neither a socket nor a FIFO, so accept it by its prefix.
+  if (process.platform === 'win32') {
+    return record.messagingSocketPath?.toLowerCase().startsWith('\\\\.\\pipe\\') ? candidate : undefined
+  }
   try {
     const st = await stat(candidate)
     return st.isSocket() ? candidate : undefined

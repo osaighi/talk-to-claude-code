@@ -66,7 +66,9 @@ export function udsAddress(socketPath: string): string {
  * path>.key, so the hash tells us which file to read without guessing.
  */
 async function readPeerToken(socketPath: string, pid: number): Promise<string | undefined> {
-  const hash = createHash('sha256').update(path.resolve(socketPath)).digest('hex')
+  // On Windows the CLI hashes the lowercased pipe name, not the path as written.
+  const canonical = process.platform === 'win32' ? socketPath.toLowerCase() : path.resolve(socketPath)
+  const hash = createHash('sha256').update(canonical).digest('hex')
   const dir = sessionsDir()
 
   let entries: string[]
@@ -106,7 +108,10 @@ export class ReceiptListener {
 
   async start(): Promise<void> {
     if (this.server) return
-    const target = path.join(socketDir(), `cc-msg-${randomBytes(16).toString('hex')}.sock`)
+    // Windows sessions reply to a named pipe in the same LOCAL namespace they use.
+    const target = process.platform === 'win32'
+      ? `\\\\.\\pipe\\LOCAL\\cc-msg-${randomBytes(16).toString('hex')}`
+      : path.join(socketDir(), `cc-msg-${randomBytes(16).toString('hex')}.sock`)
     const server = net.createServer({ allowHalfOpen: true }, socket => this.handle(socket))
     server.on('error', () => {})
 
@@ -202,7 +207,7 @@ export class ReceiptListener {
     this.server = undefined
     this.socketPath = undefined
     if (server) await new Promise<void>(resolve => server.close(() => resolve()))
-    if (target) await unlink(target).catch(() => {})
+    if (target && process.platform !== 'win32') await unlink(target).catch(() => {})
   }
 }
 
